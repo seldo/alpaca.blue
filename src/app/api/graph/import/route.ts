@@ -1,13 +1,21 @@
 import { NextRequest, NextResponse } from "next/server";
-import { importBlueskyFollows } from "@/lib/bluesky";
+import { storeBlueskyFollows } from "@/lib/bluesky";
 import { importMastodonFollows } from "@/lib/mastodon";
 
 export async function POST(request: NextRequest) {
   try {
-    const { platform } = await request.json();
+    const body = await request.json();
+    const { platform } = body;
 
     if (platform === "bluesky") {
-      const result = await importBlueskyFollows();
+      const { follows } = body;
+      if (!follows || !Array.isArray(follows)) {
+        return NextResponse.json(
+          { error: "follows array is required for Bluesky import" },
+          { status: 400 }
+        );
+      }
+      const result = await storeBlueskyFollows(follows);
       return NextResponse.json({
         platform: "bluesky",
         imported: result.imported,

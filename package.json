@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@atproto/api": "^0.19.3",
+    "@atproto/oauth-client-browser": "^0.3.41",
     "dotenv": "^17.3.1",
     "drizzle-orm": "^0.45.1",
     "mysql2": "^3.19.1",

@@ -1,22 +1,37 @@
 import { NextRequest, NextResponse } from "next/server";
-import { authenticateBluesky } from "@/lib/bluesky";
+import { db } from "@/db";
+import { connectedAccounts } from "@/db/schema";
 
+// Called after browser-side OAuth completes to persist the connection server-side
 export async function POST(request: NextRequest) {
   try {
-    const { handle, appPassword } = await request.json();
+    const { handle, did } = await request.json();
 
-    if (!handle || !appPassword) {
+    if (!handle || !did) {
       return NextResponse.json(
-        { error: "Handle and app password are required" },
+        { error: "Handle and DID are required" },
         { status: 400 }
       );
     }
 
-    const result = await authenticateBluesky(handle, appPassword);
-    return NextResponse.json(result);
+    await db
+      .insert(connectedAccounts)
+      .values({
+        platform: "bluesky",
+        handle,
+        did,
+      })
+      .onDuplicateKeyUpdate({
+        set: {
+          did,
+          updatedAt: new Date(),
+        },
+      });
+
+    return NextResponse.json({ handle, did });
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Authentication failed";
-    return NextResponse.json({ error: message }, { status: 401 });
+      error instanceof Error ? error.message : "Failed to save connection";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
