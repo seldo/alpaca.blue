@@ -83,6 +83,37 @@ export const posts = mysqlTable(
   ]
 );
 
+// Candidate matches between platform identities, staged for review
+export const matchSuggestions = mysqlTable(
+  "match_suggestions",
+  {
+    id: int("id").primaryKey().autoincrement(),
+    blueskyIdentityId: int("bluesky_identity_id")
+      .references(() => platformIdentities.id, { onDelete: "cascade" })
+      .notNull(),
+    mastodonIdentityId: int("mastodon_identity_id")
+      .references(() => platformIdentities.id, { onDelete: "cascade" })
+      .notNull(),
+    heuristicScore: float("heuristic_score").notNull(),
+    llmConfidence: float("llm_confidence"),
+    llmReasoning: text("llm_reasoning"),
+    status: varchar("status", { length: 20 }).notNull().default("pending"),
+    // "pending" | "confirmed" | "rejected" | "auto_confirmed"
+    personId: int("person_id").references(() => persons.id, {
+      onDelete: "set null",
+    }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("suggestion_pair_idx").on(
+      table.blueskyIdentityId,
+      table.mastodonIdentityId
+    ),
+    index("suggestion_status_idx").on(table.status),
+  ]
+);
+
 // Connected accounts — the user's own platform credentials
 export const connectedAccounts = mysqlTable(
   "connected_accounts",

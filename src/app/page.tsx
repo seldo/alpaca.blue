@@ -82,6 +82,35 @@ export default function Home() {
               </p>
             )}
           </section>
+
+          {blueskyConnected && mastodonConnected && (
+            <>
+              <section className="section">
+                <h2 className="section-title">Your Timeline</h2>
+                <div className="card">
+                  <p style={{ fontSize: "0.875rem", marginBottom: "12px" }}>
+                    See posts from both platforms in a single, merged feed.
+                  </p>
+                  <a href="/timeline" className="btn btn-bluesky" style={{ textDecoration: "none", display: "inline-block" }}>
+                    View Timeline
+                  </a>
+                </div>
+              </section>
+
+              <section className="section">
+                <h2 className="section-title">Identity Resolution</h2>
+                <div className="card">
+                  <p style={{ fontSize: "0.875rem", marginBottom: "12px" }}>
+                    Match people across Bluesky and Mastodon to see a unified view
+                    of their posts.
+                  </p>
+                  <a href="/identities" className="btn btn-outline" style={{ textDecoration: "none", display: "inline-block" }}>
+                    Manage Identities
+                  </a>
+                </div>
+              </section>
+            </>
+          )}
         </>
       )}
     </main>
