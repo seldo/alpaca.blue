@@ -13,34 +13,41 @@ export interface BlueskyFollowData {
 // Store follows sent from the browser-side agent
 export async function storeBlueskyFollows(follows: BlueskyFollowData[]) {
   let imported = 0;
+  const errors: Array<{ handle: string; error: string }> = [];
 
   for (const follow of follows) {
-    await db
-      .insert(platformIdentities)
-      .values({
-        platform: "bluesky",
-        handle: follow.handle,
-        did: follow.did,
-        displayName: follow.displayName || null,
-        avatarUrl: follow.avatar || null,
-        bio: follow.description || null,
-        profileUrl: `https://bsky.app/profile/${follow.handle}`,
-        isFollowed: true,
-        rawProfile: follow as unknown as Record<string, unknown>,
-      })
-      .onDuplicateKeyUpdate({
-        set: {
+    try {
+      await db
+        .insert(platformIdentities)
+        .values({
+          platform: "bluesky",
+          handle: follow.handle,
           did: follow.did,
           displayName: follow.displayName || null,
           avatarUrl: follow.avatar || null,
           bio: follow.description || null,
+          profileUrl: `https://bsky.app/profile/${follow.handle}`,
           isFollowed: true,
           rawProfile: follow as unknown as Record<string, unknown>,
-          updatedAt: new Date(),
-        },
-      });
+        })
+        .onDuplicateKeyUpdate({
+          set: {
+            did: follow.did,
+            displayName: follow.displayName || null,
+            avatarUrl: follow.avatar || null,
+            bio: follow.description || null,
+            isFollowed: true,
+            rawProfile: follow as unknown as Record<string, unknown>,
+            updatedAt: new Date(),
+          },
+        });
 
-    imported++;
+      imported++;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.error(`Failed to import ${follow.handle}:`, message);
+      errors.push({ handle: follow.handle, error: message });
+    }
   }
 
   await db
@@ -48,5 +55,9 @@ export async function storeBlueskyFollows(follows: BlueskyFollowData[]) {
     .set({ lastSyncAt: new Date() })
     .where(eq(connectedAccounts.platform, "bluesky"));
 
-  return { imported };
+  if (errors.length > 0) {
+    console.error(`Import completed with ${errors.length} failures:`, errors);
+  }
+
+  return { imported, errors: errors.length };
 }

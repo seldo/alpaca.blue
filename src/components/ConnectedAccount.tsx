@@ -1,6 +1,12 @@
 "use client";
 
 import { useState, useRef, useEffect } from "react";
+import {
+  getBlueskyOAuthClient,
+  getBlueskyAgent,
+  setBlueskyAgent,
+  clearBlueskySession,
+} from "@/lib/bluesky-oauth";
 
 interface Account {
   id: number;
@@ -19,70 +25,54 @@ export function ConnectedAccount({
 }) {
   const [importing, setImporting] = useState(false);
   const [result, setResult] = useState<string | null>(null);
+  const [sessionExpired, setSessionExpired] = useState(false);
+  const [reconnecting, setReconnecting] = useState(false);
   const agentRef = useRef<import("@atproto/api").Agent | null>(null);
 
-  // For Bluesky, restore the OAuth session so we can fetch follows client-side
   useEffect(() => {
     if (account.platform !== "bluesky") return;
 
+    // Check for a cached agent first (set during OAuth in BlueskyConnect)
+    const existing = getBlueskyAgent();
+    if (existing) {
+      agentRef.current = existing;
+      return;
+    }
+
+    // No cached agent — try to restore session from browser storage
     (async () => {
       try {
-        const { BrowserOAuthClient } = await import(
-          "@atproto/oauth-client-browser"
-        );
-        const origin = window.location.origin;
-        const isLocalhost = window.location.hostname === "127.0.0.1";
-
-        let clientId: string;
-        if (isLocalhost) {
-          const cimdRes = await fetch("https://cimd-service.fly.dev/clients", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              client_name: "alpaca.blue",
-              client_uri: origin,
-              redirect_uris: [`${origin}/`],
-              scope: "atproto transition:generic",
-              grant_types: ["authorization_code", "refresh_token"],
-              response_types: ["code"],
-              token_endpoint_auth_method: "none",
-              application_type: "web",
-              dpop_bound_access_tokens: true,
-            }),
-          });
-          if (!cimdRes.ok) return;
-          const cimdData = await cimdRes.json();
-          clientId = cimdData.client_id;
-        } else {
-          clientId = `${origin}/api/client-metadata`;
-        }
-
-        const client = new BrowserOAuthClient({
-          clientMetadata: {
-            client_id: clientId,
-            client_name: "alpaca.blue",
-            client_uri: origin,
-            redirect_uris: [`${origin}/`],
-            scope: "atproto transition:generic",
-            grant_types: ["authorization_code", "refresh_token"],
-            response_types: ["code"],
-            token_endpoint_auth_method: "none",
-            application_type: "web",
-            dpop_bound_access_tokens: true,
-          },
-          handleResolver: "https://bsky.social",
-        });
-
+        const client = await getBlueskyOAuthClient();
         const result = await client.init();
         if (result?.session) {
           const { Agent } = await import("@atproto/api");
-          agentRef.current = new Agent(result.session);
+          const agent = new Agent(result.session);
+          agentRef.current = agent;
+          setBlueskyAgent(agent);
+        } else {
+          setSessionExpired(true);
         }
       } catch {
-        // Session not available — import won't work for Bluesky
+        setSessionExpired(true);
       }
     })();
   }, [account.platform]);
+
+  async function handleReconnect() {
+    setReconnecting(true);
+    setResult(null);
+    try {
+      // Clear stale DPoP keys/session before starting fresh
+      await clearBlueskySession();
+      const client = await getBlueskyOAuthClient();
+      await client.signIn(account.handle, {
+        scope: "atproto transition:generic",
+      });
+    } catch (err) {
+      setResult(err instanceof Error ? err.message : "Reconnect failed");
+      setReconnecting(false);
+    }
+  }
 
   const handleImport = async () => {
     setImporting(true);
@@ -92,7 +82,6 @@ export function ConnectedAccount({
       if (account.platform === "bluesky") {
         await importBluesky();
       } else {
-        // Mastodon import happens server-side
         const res = await fetch("/api/graph/import", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -113,14 +102,12 @@ export function ConnectedAccount({
   async function importBluesky() {
     const agent = agentRef.current;
     if (!agent || !agent.did) {
-      throw new Error(
-        "Bluesky session expired. Please reconnect your account."
-      );
+      setSessionExpired(true);
+      throw new Error("Session expired");
     }
 
     setResult("Fetching follows...");
 
-    // Fetch all follows client-side
     const allFollows: Array<{
       handle: string;
       did: string;
@@ -151,7 +138,6 @@ export function ConnectedAccount({
 
     setResult(`Storing ${allFollows.length} follows...`);
 
-    // Send to server in batches
     const batchSize = 100;
     let totalImported = 0;
     for (let i = 0; i < allFollows.length; i += batchSize) {
@@ -190,13 +176,23 @@ export function ConnectedAccount({
 
       <div className="account-actions">
         {result && <span className="result-text">{result}</span>}
-        <button
-          onClick={handleImport}
-          disabled={importing}
-          className="btn btn-outline"
-        >
-          {importing ? "Importing..." : "Import follows"}
-        </button>
+        {sessionExpired && account.platform === "bluesky" ? (
+          <button
+            onClick={handleReconnect}
+            disabled={reconnecting}
+            className="btn btn-bluesky"
+          >
+            {reconnecting ? "Reconnecting..." : "Reconnect"}
+          </button>
+        ) : (
+          <button
+            onClick={handleImport}
+            disabled={importing}
+            className="btn btn-outline"
+          >
+            {importing ? "Importing..." : "Import follows"}
+          </button>
+        )}
       </div>
     </div>
   );

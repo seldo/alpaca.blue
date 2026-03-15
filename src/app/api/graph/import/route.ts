@@ -35,6 +35,7 @@ export async function POST(request: NextRequest) {
       { status: 400 }
     );
   } catch (error) {
+    console.error("Import error:", error);
     const message =
       error instanceof Error ? error.message : "Import failed";
     return NextResponse.json({ error: message }, { status: 500 });

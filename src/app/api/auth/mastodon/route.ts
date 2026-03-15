@@ -2,6 +2,12 @@ import { NextRequest, NextResponse } from "next/server";
 import { registerMastodonApp, getMastodonAuthUrl } from "@/lib/mastodon";
 import { cookies } from "next/headers";
 
+function getAppOrigin(request: NextRequest): string {
+  const proto = request.headers.get("x-forwarded-proto") || "http";
+  const host = request.headers.get("host") || "localhost:3000";
+  return `${proto}://${host}`;
+}
+
 export async function POST(request: NextRequest) {
   try {
     const { instanceUrl } = await request.json();
@@ -21,8 +27,9 @@ export async function POST(request: NextRequest) {
     // Remove trailing slash
     normalizedUrl = normalizedUrl.replace(/\/+$/, "");
 
-    const app = await registerMastodonApp(normalizedUrl);
-    const authUrl = getMastodonAuthUrl(normalizedUrl, app.client_id);
+    const appOrigin = getAppOrigin(request);
+    const app = await registerMastodonApp(normalizedUrl, appOrigin);
+    const authUrl = getMastodonAuthUrl(normalizedUrl, app.client_id, appOrigin);
 
     // Store client credentials in cookies for the callback
     const cookieStore = await cookies();

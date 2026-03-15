@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import type { BrowserOAuthClient } from "@atproto/oauth-client-browser";
+import { getBlueskyOAuthClient, setBlueskyAgent } from "@/lib/bluesky-oauth";
 
 export function BlueskyConnect({
   onConnected,
@@ -20,63 +21,7 @@ export function BlueskyConnect({
 
   async function initOAuth() {
     try {
-      const { BrowserOAuthClient } = await import(
-        "@atproto/oauth-client-browser"
-      );
-
-      // RFC 8252: use loopback IP instead of localhost
-      if (window.location.hostname === "localhost") {
-        window.location.hostname = "127.0.0.1";
-        return;
-      }
-
-      const origin = window.location.origin;
-      const redirectUri = `${origin}/`;
-      const isLocalhost = window.location.hostname === "127.0.0.1";
-
-      let clientId: string;
-
-      if (isLocalhost) {
-        // Use CIMD service for localhost dev
-        const cimdRes = await fetch("https://cimd-service.fly.dev/clients", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            client_name: "alpaca.blue",
-            client_uri: origin,
-            redirect_uris: [redirectUri],
-            scope: "atproto transition:generic",
-            grant_types: ["authorization_code", "refresh_token"],
-            response_types: ["code"],
-            token_endpoint_auth_method: "none",
-            application_type: "web",
-            dpop_bound_access_tokens: true,
-          }),
-        });
-        if (!cimdRes.ok)
-          throw new Error("Failed to register OAuth client with CIMD service");
-        const cimdData = await cimdRes.json();
-        clientId = cimdData.client_id;
-      } else {
-        clientId = `${origin}/api/client-metadata`;
-      }
-
-      const client = new BrowserOAuthClient({
-        clientMetadata: {
-          client_id: clientId,
-          client_name: "alpaca.blue",
-          client_uri: origin,
-          redirect_uris: [redirectUri],
-          scope: "atproto transition:generic",
-          grant_types: ["authorization_code", "refresh_token"],
-          response_types: ["code"],
-          token_endpoint_auth_method: "none",
-          application_type: "web",
-          dpop_bound_access_tokens: true,
-        },
-        handleResolver: "https://bsky.social",
-      });
-
+      const client = await getBlueskyOAuthClient();
       clientRef.current = client;
 
       // Check if returning from OAuth redirect
@@ -88,12 +33,12 @@ export function BlueskyConnect({
 
         const { Agent } = await import("@atproto/api");
         const agent = new Agent(result.session);
+        setBlueskyAgent(agent);
 
         const profile = await agent.getProfile({
           actor: result.session.did,
         });
 
-        // Save the connection server-side
         await fetch("/api/auth/bluesky", {
           method: "POST",
           headers: { "Content-Type": "application/json" },

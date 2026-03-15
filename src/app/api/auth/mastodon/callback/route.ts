@@ -23,11 +23,16 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    const proto = request.headers.get("x-forwarded-proto") || "http";
+    const host = request.headers.get("host") || "localhost:3000";
+    const appOrigin = `${proto}://${host}`;
+
     const accessToken = await exchangeMastodonToken(
       instanceUrl,
       clientId,
       clientSecret,
-      code
+      code,
+      appOrigin
     );
 
     await saveMastodonAccount(instanceUrl, accessToken);

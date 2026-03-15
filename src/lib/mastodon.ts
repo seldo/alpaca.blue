@@ -17,9 +17,14 @@ interface MastodonAccount {
   url: string;
 }
 
+function getRedirectUri(appOrigin: string) {
+  return `${appOrigin}/api/auth/mastodon/callback`;
+}
+
 // Register an OAuth app with a Mastodon instance
 export async function registerMastodonApp(
-  instanceUrl: string
+  instanceUrl: string,
+  appOrigin: string
 ): Promise<MastodonApp> {
   const url = `${instanceUrl}/api/v1/apps`;
   const response = await fetch(url, {
@@ -27,7 +32,7 @@ export async function registerMastodonApp(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       client_name: "alpaca.blue",
-      redirect_uris: `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/mastodon/callback`,
+      redirect_uris: getRedirectUri(appOrigin),
       scopes: "read",
       website: "https://alpaca.blue",
     }),
@@ -43,11 +48,12 @@ export async function registerMastodonApp(
 // Generate the OAuth authorization URL
 export function getMastodonAuthUrl(
   instanceUrl: string,
-  clientId: string
+  clientId: string,
+  appOrigin: string
 ): string {
   const params = new URLSearchParams({
     client_id: clientId,
-    redirect_uri: `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/mastodon/callback`,
+    redirect_uri: getRedirectUri(appOrigin),
     response_type: "code",
     scope: "read",
   });
@@ -60,7 +66,8 @@ export async function exchangeMastodonToken(
   instanceUrl: string,
   clientId: string,
   clientSecret: string,
-  code: string
+  code: string,
+  appOrigin: string
 ): Promise<string> {
   const response = await fetch(`${instanceUrl}/oauth/token`, {
     method: "POST",
@@ -68,7 +75,7 @@ export async function exchangeMastodonToken(
     body: JSON.stringify({
       client_id: clientId,
       client_secret: clientSecret,
-      redirect_uri: `${process.env.NEXT_PUBLIC_APP_URL}/api/auth/mastodon/callback`,
+      redirect_uri: getRedirectUri(appOrigin),
       grant_type: "authorization_code",
       code,
       scope: "read",

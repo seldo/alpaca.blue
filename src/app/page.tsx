@@ -21,7 +21,9 @@ export default function Home() {
     try {
       const res = await fetch("/api/accounts");
       const data = await res.json();
-      setAccounts(data);
+      if (Array.isArray(data)) {
+        setAccounts(data);
+      }
     } catch (err) {
       console.error("Failed to fetch accounts:", err);
     } finally {
