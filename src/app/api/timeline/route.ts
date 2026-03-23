@@ -2,9 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { posts, platformIdentities, persons } from "@/db/schema";
 import { eq, lt, desc, isNull, and } from "drizzle-orm";
+import { requireSession, unauthorizedResponse } from "@/lib/session";
 
 export async function GET(request: NextRequest) {
   try {
+    const session = await requireSession();
+    if (!session) return unauthorizedResponse();
+    const userId = session.userId!;
+
     const { searchParams } = new URL(request.url);
     const cursor = searchParams.get("cursor");
     const limit = Math.min(parseInt(searchParams.get("limit") || "50"), 100);
@@ -13,7 +18,7 @@ export async function GET(request: NextRequest) {
     const fetchLimit = Math.ceil(limit * 1.5);
 
     // Filter out replies in SQL so pagination isn't broken
-    const conditions = [isNull(posts.replyToId)];
+    const conditions = [isNull(posts.replyToId), eq(posts.userId, userId)];
     if (cursor) {
       conditions.push(lt(posts.postedAt, new Date(cursor)));
     }

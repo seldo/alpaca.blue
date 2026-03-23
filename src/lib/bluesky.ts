@@ -1,6 +1,6 @@
 import { db } from "@/db";
 import { connectedAccounts, platformIdentities } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 
 export interface BlueskyFollowData {
   handle: string;
@@ -11,7 +11,10 @@ export interface BlueskyFollowData {
 }
 
 // Store follows sent from the browser-side agent
-export async function storeBlueskyFollows(follows: BlueskyFollowData[]) {
+export async function storeBlueskyFollows(
+  follows: BlueskyFollowData[],
+  userId: number
+) {
   let imported = 0;
   const errors: Array<{ handle: string; error: string }> = [];
 
@@ -20,6 +23,7 @@ export async function storeBlueskyFollows(follows: BlueskyFollowData[]) {
       await db
         .insert(platformIdentities)
         .values({
+          userId,
           platform: "bluesky",
           handle: follow.handle,
           did: follow.did,
@@ -53,7 +57,12 @@ export async function storeBlueskyFollows(follows: BlueskyFollowData[]) {
   await db
     .update(connectedAccounts)
     .set({ lastSyncAt: new Date() })
-    .where(eq(connectedAccounts.platform, "bluesky"));
+    .where(
+      and(
+        eq(connectedAccounts.userId, userId),
+        eq(connectedAccounts.platform, "bluesky")
+      )
+    );
 
   if (errors.length > 0) {
     console.error(`Import completed with ${errors.length} failures:`, errors);

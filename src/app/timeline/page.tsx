@@ -7,6 +7,7 @@ import {
   setBlueskyAgent,
 } from "@/lib/bluesky-oauth";
 import { PostCard } from "@/components/PostCard";
+import { UserNav } from "@/components/UserNav";
 
 interface PostData {
   id: number;
@@ -290,6 +291,7 @@ export default function TimelinePage() {
 
   return (
     <main className="main">
+      <UserNav />
       <div className="header">
         <img
           src="/logo-horizontal.svg"

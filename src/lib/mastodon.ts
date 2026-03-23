@@ -93,7 +93,8 @@ export async function exchangeMastodonToken(
 // Verify credentials and save the connected account
 export async function saveMastodonAccount(
   instanceUrl: string,
-  accessToken: string
+  accessToken: string,
+  userId: number
 ) {
   const response = await fetch(
     `${instanceUrl}/api/v1/accounts/verify_credentials`,
@@ -112,6 +113,7 @@ export async function saveMastodonAccount(
   await db
     .insert(connectedAccounts)
     .values({
+      userId,
       platform: "mastodon",
       handle: fullHandle,
       did: account.id,
@@ -158,11 +160,16 @@ async function fetchFollowsPage(
   return { accounts, nextUrl };
 }
 
-export async function importMastodonFollows() {
+export async function importMastodonFollows(userId: number) {
   const [account] = await db
     .select()
     .from(connectedAccounts)
-    .where(eq(connectedAccounts.platform, "mastodon"))
+    .where(
+      and(
+        eq(connectedAccounts.userId, userId),
+        eq(connectedAccounts.platform, "mastodon")
+      )
+    )
     .limit(1);
 
   if (!account?.accessToken || !account.instanceUrl) {
@@ -192,6 +199,7 @@ export async function importMastodonFollows() {
       await db
         .insert(platformIdentities)
         .values({
+          userId,
           platform: "mastodon",
           handle,
           did: follow.id,
@@ -223,7 +231,12 @@ export async function importMastodonFollows() {
   await db
     .update(connectedAccounts)
     .set({ lastSyncAt: new Date() })
-    .where(eq(connectedAccounts.platform, "mastodon"));
+    .where(
+      and(
+        eq(connectedAccounts.userId, userId),
+        eq(connectedAccounts.platform, "mastodon")
+      )
+    );
 
   return { imported };
 }

@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { storeBlueskyFollows } from "@/lib/bluesky";
 import { importMastodonFollows } from "@/lib/mastodon";
+import { requireSession, unauthorizedResponse } from "@/lib/session";
 
 export async function POST(request: NextRequest) {
   try {
+    const session = await requireSession();
+    if (!session) return unauthorizedResponse();
+    const userId = session.userId!;
+
     const body = await request.json();
     const { platform } = body;
 
@@ -15,7 +20,7 @@ export async function POST(request: NextRequest) {
           { status: 400 }
         );
       }
-      const result = await storeBlueskyFollows(follows);
+      const result = await storeBlueskyFollows(follows, userId);
       return NextResponse.json({
         platform: "bluesky",
         imported: result.imported,
@@ -23,7 +28,7 @@ export async function POST(request: NextRequest) {
     }
 
     if (platform === "mastodon") {
-      const result = await importMastodonFollows();
+      const result = await importMastodonFollows(userId);
       return NextResponse.json({
         platform: "mastodon",
         imported: result.imported,

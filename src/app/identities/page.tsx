@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { SuggestionCard } from "@/components/SuggestionCard";
 import { PersonCard } from "@/components/PersonCard";
+import { UserNav } from "@/components/UserNav";
 
 interface Identity {
   id: number;
@@ -86,6 +87,7 @@ export default function IdentitiesPage() {
 
   return (
     <main className="main">
+      <UserNav />
       <div className="header">
         <img
           src="/logo-horizontal.svg"

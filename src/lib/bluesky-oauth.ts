@@ -32,7 +32,7 @@ export async function getBlueskyOAuthClient(): Promise<BrowserOAuthClient> {
   const { BrowserOAuthClient } = await import("@atproto/oauth-client-browser");
 
   const origin = window.location.origin;
-  const redirectUri = `${origin}/`;
+  const redirectUri = `${origin}/login`;
   const isLocalhost = window.location.hostname === "127.0.0.1";
 
   let clientId: string;
@@ -41,7 +41,7 @@ export async function getBlueskyOAuthClient(): Promise<BrowserOAuthClient> {
     // Reuse cached CIMD client ID to avoid re-registering every time.
     // Persist in localStorage so it survives page reloads — otherwise
     // session restoration fails because the client_id no longer matches.
-    const storageKey = "alpaca_cimd_client_id";
+    const storageKey = `alpaca_cimd_client_id_${redirectUri}`;
     const stored = localStorage.getItem(storageKey);
     if (cachedClientId) {
       clientId = cachedClientId;
@@ -102,7 +102,14 @@ export async function getBlueskyOAuthClient(): Promise<BrowserOAuthClient> {
 export async function clearBlueskySession() {
   cachedClient = null;
   cachedClientId = null;
-  localStorage.removeItem("alpaca_cimd_client_id");
+
+  // Clear any CIMD client IDs from localStorage
+  for (let i = localStorage.length - 1; i >= 0; i--) {
+    const key = localStorage.key(i);
+    if (key && key.startsWith("alpaca_cimd_client_id")) {
+      localStorage.removeItem(key);
+    }
+  }
 
   // The library stores DPoP keys and session data in IndexedDB
   const databases = await indexedDB.databases();

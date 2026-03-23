@@ -13,6 +13,7 @@
     "@atproto/oauth-client-browser": "^0.3.41",
     "dotenv": "^17.3.1",
     "drizzle-orm": "^0.45.1",
+    "iron-session": "^8.0.4",
     "mysql2": "^3.19.1",
     "next": "16.1.6",
     "react": "19.2.3",

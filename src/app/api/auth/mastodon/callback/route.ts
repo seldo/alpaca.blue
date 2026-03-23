@@ -1,9 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { exchangeMastodonToken, saveMastodonAccount } from "@/lib/mastodon";
 import { cookies } from "next/headers";
+import { requireSession } from "@/lib/session";
 
 export async function GET(request: NextRequest) {
   try {
+    const session = await requireSession();
+    if (!session) {
+      return NextResponse.redirect(
+        new URL("/?error=not_authenticated", request.url)
+      );
+    }
+    const userId = session.userId!;
+
     const code = request.nextUrl.searchParams.get("code");
 
     if (!code) {
@@ -35,7 +44,7 @@ export async function GET(request: NextRequest) {
       appOrigin
     );
 
-    await saveMastodonAccount(instanceUrl, accessToken);
+    await saveMastodonAccount(instanceUrl, accessToken, userId);
 
     // Clean up cookies
     cookieStore.delete("mastodon_instance");

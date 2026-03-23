@@ -1,28 +1,48 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { posts, platformIdentities } from "@/db/schema";
+import { posts, platformIdentities, persons } from "@/db/schema";
 import { eq, lt, desc, inArray, and } from "drizzle-orm";
+import { requireSession, unauthorizedResponse } from "@/lib/session";
 
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    const session = await requireSession();
+    if (!session) return unauthorizedResponse();
+    const userId = session.userId!;
+
     const { id } = await params;
     const personId = parseInt(id);
     if (isNaN(personId)) {
       return NextResponse.json({ error: "Invalid person ID" }, { status: 400 });
     }
 
+    // Verify person belongs to this user
+    const [person] = await db
+      .select()
+      .from(persons)
+      .where(and(eq(persons.id, personId), eq(persons.userId, userId)));
+
+    if (!person) {
+      return NextResponse.json({ error: "Person not found" }, { status: 404 });
+    }
+
     const { searchParams } = new URL(request.url);
     const cursor = searchParams.get("cursor");
     const limit = Math.min(parseInt(searchParams.get("limit") || "50"), 100);
 
-    // Get all identity IDs for this person
+    // Get all identity IDs for this person, filtered by userId
     const identities = await db
       .select()
       .from(platformIdentities)
-      .where(eq(platformIdentities.personId, personId));
+      .where(
+        and(
+          eq(platformIdentities.personId, personId),
+          eq(platformIdentities.userId, userId)
+        )
+      );
 
     if (identities.length === 0) {
       return NextResponse.json({ posts: [], nextCursor: null });

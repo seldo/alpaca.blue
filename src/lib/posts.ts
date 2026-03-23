@@ -97,7 +97,8 @@ export function computeDedupeHash(
 // ── Store Bluesky posts ────────────────────────────────────
 
 export async function storeBlueskyPosts(
-  postsData: BlueskyPostData[]
+  postsData: BlueskyPostData[],
+  userId: number
 ): Promise<{ stored: number }> {
   let stored = 0;
 
@@ -109,6 +110,7 @@ export async function storeBlueskyPosts(
         .from(platformIdentities)
         .where(
           and(
+            eq(platformIdentities.userId, userId),
             eq(platformIdentities.platform, "bluesky"),
             eq(platformIdentities.did, post.authorDid)
           )
@@ -128,6 +130,7 @@ export async function storeBlueskyPosts(
       await db
         .insert(posts)
         .values({
+          userId,
           platformIdentityId: identity.id,
           platform: "bluesky",
           platformPostId: post.uri,
@@ -164,13 +167,20 @@ export async function storeBlueskyPosts(
 
 // ── Fetch & store Mastodon posts ───────────────────────────
 
-export async function fetchAndStoreMastodonPosts(): Promise<{
+export async function fetchAndStoreMastodonPosts(
+  userId: number
+): Promise<{
   stored: number;
 }> {
   const [account] = await db
     .select()
     .from(connectedAccounts)
-    .where(eq(connectedAccounts.platform, "mastodon"))
+    .where(
+      and(
+        eq(connectedAccounts.userId, userId),
+        eq(connectedAccounts.platform, "mastodon")
+      )
+    )
     .limit(1);
 
   if (!account?.accessToken || !account.instanceUrl) {
@@ -210,6 +220,7 @@ export async function fetchAndStoreMastodonPosts(): Promise<{
         .from(platformIdentities)
         .where(
           and(
+            eq(platformIdentities.userId, userId),
             eq(platformIdentities.platform, "mastodon"),
             eq(platformIdentities.handle, handle)
           )
@@ -230,6 +241,7 @@ export async function fetchAndStoreMastodonPosts(): Promise<{
       await db
         .insert(posts)
         .values({
+          userId,
           platformIdentityId: identity.id,
           platform: "mastodon",
           platformPostId: actual.id,

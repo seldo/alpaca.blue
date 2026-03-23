@@ -12,7 +12,7 @@ export async function GET(request: NextRequest) {
     client_id: clientId,
     client_name: "alpaca.blue",
     client_uri: origin,
-    redirect_uris: [`${origin}/`],
+    redirect_uris: [`${origin}/login`],
     scope: "atproto transition:generic",
     grant_types: ["authorization_code", "refresh_token"],
     response_types: ["code"],

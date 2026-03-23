@@ -1,9 +1,9 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { BlueskyConnect } from "@/components/BlueskyConnect";
 import { MastodonConnect } from "@/components/MastodonConnect";
 import { ConnectedAccount } from "@/components/ConnectedAccount";
+import { UserNav } from "@/components/UserNav";
 
 interface Account {
   id: number;
@@ -35,11 +35,11 @@ export default function Home() {
     fetchAccounts();
   }, [fetchAccounts]);
 
-  const blueskyConnected = accounts.some((a) => a.platform === "bluesky");
   const mastodonConnected = accounts.some((a) => a.platform === "mastodon");
 
   return (
     <main className="main">
+      <UserNav />
       <div className="header">
         <img src="/logo-horizontal.svg" alt="alpaca.blue" className="header-logo" />
         <p>Your unified social timeline</p>
@@ -66,50 +66,38 @@ export default function Home() {
             </section>
           )}
 
+          {!mastodonConnected && (
+            <section className="section">
+              <h2 className="section-title">Add Mastodon Account</h2>
+              <MastodonConnect />
+            </section>
+          )}
+
           <section className="section">
-            <h2 className="section-title">
-              {accounts.length > 0
-                ? "Add Another Account"
-                : "Connect Your Accounts"}
-            </h2>
-            {!blueskyConnected && (
-              <BlueskyConnect onConnected={fetchAccounts} />
-            )}
-            {!mastodonConnected && <MastodonConnect />}
-            {blueskyConnected && mastodonConnected && (
-              <p className="text-muted">
-                Both platforms connected. More platforms coming soon.
+            <h2 className="section-title">Your Timeline</h2>
+            <div className="card">
+              <p style={{ fontSize: "0.875rem", marginBottom: "12px" }}>
+                See posts from both platforms in a single, merged feed.
               </p>
-            )}
+              <a href="/timeline" className="btn btn-bluesky" style={{ textDecoration: "none", display: "inline-block" }}>
+                View Timeline
+              </a>
+            </div>
           </section>
 
-          {blueskyConnected && mastodonConnected && (
-            <>
-              <section className="section">
-                <h2 className="section-title">Your Timeline</h2>
-                <div className="card">
-                  <p style={{ fontSize: "0.875rem", marginBottom: "12px" }}>
-                    See posts from both platforms in a single, merged feed.
-                  </p>
-                  <a href="/timeline" className="btn btn-bluesky" style={{ textDecoration: "none", display: "inline-block" }}>
-                    View Timeline
-                  </a>
-                </div>
-              </section>
-
-              <section className="section">
-                <h2 className="section-title">Identity Resolution</h2>
-                <div className="card">
-                  <p style={{ fontSize: "0.875rem", marginBottom: "12px" }}>
-                    Match people across Bluesky and Mastodon to see a unified view
-                    of their posts.
-                  </p>
-                  <a href="/identities" className="btn btn-outline" style={{ textDecoration: "none", display: "inline-block" }}>
-                    Manage Identities
-                  </a>
-                </div>
-              </section>
-            </>
+          {mastodonConnected && (
+            <section className="section">
+              <h2 className="section-title">Identity Resolution</h2>
+              <div className="card">
+                <p style={{ fontSize: "0.875rem", marginBottom: "12px" }}>
+                  Match people across Bluesky and Mastodon to see a unified view
+                  of their posts.
+                </p>
+                <a href="/identities" className="btn btn-outline" style={{ textDecoration: "none", display: "inline-block" }}>
+                  Manage Identities
+                </a>
+              </div>
+            </section>
           )}
         </>
       )}

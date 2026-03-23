@@ -47,6 +47,61 @@ body {
   padding: 48px 16px;
 }
 
+/* Auth pages */
+.auth-page {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  padding: 16px;
+}
+
+.auth-container {
+  width: 100%;
+  max-width: 380px;
+  text-align: center;
+}
+
+.auth-subtitle {
+  color: var(--color-text-muted);
+  font-size: 1rem;
+  margin-top: 8px;
+  margin-bottom: 32px;
+}
+
+.btn-full {
+  width: 100%;
+}
+
+/* User navigation */
+.user-nav {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-bottom: 16px;
+  font-size: 0.8125rem;
+}
+
+.user-nav-handle {
+  color: var(--color-text-muted);
+}
+
+.user-nav-logout {
+  color: var(--color-text-muted);
+  background: none;
+  border: none;
+  font-family: inherit;
+  font-size: 0.8125rem;
+  cursor: pointer;
+  padding: 0;
+  text-decoration: underline;
+}
+
+.user-nav-logout:hover {
+  color: var(--color-text);
+}
+
 .header {
   margin-bottom: 48px;
 }

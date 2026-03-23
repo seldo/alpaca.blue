@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { registerMastodonApp, getMastodonAuthUrl } from "@/lib/mastodon";
 import { cookies } from "next/headers";
+import { requireSession, unauthorizedResponse } from "@/lib/session";
 
 function getAppOrigin(request: NextRequest): string {
   const proto = request.headers.get("x-forwarded-proto") || "http";
@@ -10,6 +11,9 @@ function getAppOrigin(request: NextRequest): string {
 
 export async function POST(request: NextRequest) {
   try {
+    const session = await requireSession();
+    if (!session) return unauthorizedResponse();
+
     const { instanceUrl } = await request.json();
 
     if (!instanceUrl) {

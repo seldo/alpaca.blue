@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { persons, platformIdentities } from "@/db/schema";
-import { eq } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
+import { requireSession, unauthorizedResponse } from "@/lib/session";
 
 export async function POST(request: Request) {
   try {
+    const session = await requireSession();
+    if (!session) return unauthorizedResponse();
+    const userId = session.userId!;
+
     const { identityId } = await request.json();
 
     if (!identityId) {
@@ -14,10 +19,16 @@ export async function POST(request: Request) {
       );
     }
 
+    // Verify identity belongs to this user
     const [identity] = await db
       .select()
       .from(platformIdentities)
-      .where(eq(platformIdentities.id, identityId));
+      .where(
+        and(
+          eq(platformIdentities.id, identityId),
+          eq(platformIdentities.userId, userId)
+        )
+      );
 
     if (!identity) {
       return NextResponse.json(

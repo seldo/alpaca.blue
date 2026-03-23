@@ -306,6 +306,7 @@ async function evaluateBatchWithLLM(
 // ── Person creation ────────────────────────────────────────
 
 async function createPersonFromMatch(
+  userId: number,
   blueskyId: number,
   mastodonId: number,
   confidence: number,
@@ -315,6 +316,7 @@ async function createPersonFromMatch(
   const displayName = blueskyName || mastodonName || "Unknown";
 
   const [result] = await db.insert(persons).values({
+    userId,
     displayName,
     autoMatched: true,
     matchConfidence: confidence,
@@ -334,7 +336,7 @@ async function createPersonFromMatch(
 
 // ── Pipeline orchestrator ──────────────────────────────────
 
-export async function runResolutionPipeline(): Promise<ResolutionStats> {
+export async function runResolutionPipeline(userId: number): Promise<ResolutionStats> {
   const stats: ResolutionStats = {
     candidatesFound: 0,
     llmEvaluated: 0,
@@ -348,6 +350,7 @@ export async function runResolutionPipeline(): Promise<ResolutionStats> {
     .from(platformIdentities)
     .where(
       and(
+        eq(platformIdentities.userId, userId),
         eq(platformIdentities.platform, "bluesky"),
         eq(platformIdentities.isFollowed, true)
       )
@@ -358,6 +361,7 @@ export async function runResolutionPipeline(): Promise<ResolutionStats> {
     .from(platformIdentities)
     .where(
       and(
+        eq(platformIdentities.userId, userId),
         eq(platformIdentities.platform, "mastodon"),
         eq(platformIdentities.isFollowed, true)
       )
@@ -417,6 +421,7 @@ export async function runResolutionPipeline(): Promise<ResolutionStats> {
       if (result.isSamePerson && result.confidence >= 0.9) {
         status = "auto_confirmed";
         personId = await createPersonFromMatch(
+          userId,
           candidate.bluesky.id,
           candidate.mastodon.id,
           result.confidence,
@@ -433,6 +438,7 @@ export async function runResolutionPipeline(): Promise<ResolutionStats> {
 
       try {
         await db.insert(matchSuggestions).values({
+          userId,
           blueskyIdentityId: candidate.bluesky.id,
           mastodonIdentityId: candidate.mastodon.id,
           heuristicScore: candidate.heuristicScore,

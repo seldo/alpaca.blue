@@ -6,13 +6,23 @@ import {
   persons,
 } from "@/db/schema";
 import { eq, and, inArray } from "drizzle-orm";
+import { requireSession, unauthorizedResponse } from "@/lib/session";
 
 export async function GET() {
   try {
+    const session = await requireSession();
+    if (!session) return unauthorizedResponse();
+    const userId = session.userId!;
+
     const suggestions = await db
       .select()
       .from(matchSuggestions)
-      .where(eq(matchSuggestions.status, "pending"));
+      .where(
+        and(
+          eq(matchSuggestions.status, "pending"),
+          eq(matchSuggestions.userId, userId)
+        )
+      );
 
     if (suggestions.length === 0) {
       return NextResponse.json([]);
@@ -49,6 +59,10 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
+    const session = await requireSession();
+    if (!session) return unauthorizedResponse();
+    const userId = session.userId!;
+
     const { suggestionId, action } = await request.json();
 
     if (!suggestionId || !["confirm", "reject"].includes(action)) {
@@ -58,10 +72,16 @@ export async function POST(request: Request) {
       );
     }
 
+    // Verify suggestion belongs to this user
     const [suggestion] = await db
       .select()
       .from(matchSuggestions)
-      .where(eq(matchSuggestions.id, suggestionId));
+      .where(
+        and(
+          eq(matchSuggestions.id, suggestionId),
+          eq(matchSuggestions.userId, userId)
+        )
+      );
 
     if (!suggestion) {
       return NextResponse.json(
@@ -92,6 +112,7 @@ export async function POST(request: Request) {
       bluesky?.displayName || mastodon?.displayName || "Unknown";
 
     const [result] = await db.insert(persons).values({
+      userId,
       displayName,
       autoMatched: false,
       matchConfidence: suggestion.llmConfidence,

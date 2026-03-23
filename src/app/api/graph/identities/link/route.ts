@@ -1,10 +1,15 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { persons, platformIdentities } from "@/db/schema";
-import { eq, inArray } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
+import { requireSession, unauthorizedResponse } from "@/lib/session";
 
 export async function POST(request: Request) {
   try {
+    const session = await requireSession();
+    if (!session) return unauthorizedResponse();
+    const userId = session.userId!;
+
     const { identityIds } = await request.json();
 
     if (!Array.isArray(identityIds) || identityIds.length < 2) {
@@ -14,11 +19,16 @@ export async function POST(request: Request) {
       );
     }
 
-    // Fetch the identities
+    // Fetch the identities, filtering by userId
     const identities = await db
       .select()
       .from(platformIdentities)
-      .where(inArray(platformIdentities.id, identityIds));
+      .where(
+        and(
+          inArray(platformIdentities.id, identityIds),
+          eq(platformIdentities.userId, userId)
+        )
+      );
 
     if (identities.length < 2) {
       return NextResponse.json(
@@ -40,6 +50,7 @@ export async function POST(request: Request) {
       const displayName =
         identities.find((i) => i.displayName)?.displayName || "Unknown";
       const [result] = await db.insert(persons).values({
+        userId,
         displayName,
         autoMatched: false,
       });

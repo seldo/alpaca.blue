@@ -1,13 +1,24 @@
 import { NextResponse } from "next/server";
 import { db } from "@/db";
 import { persons, platformIdentities } from "@/db/schema";
-import { eq, isNull } from "drizzle-orm";
+import { eq } from "drizzle-orm";
+import { requireSession, unauthorizedResponse } from "@/lib/session";
 
 export async function GET() {
   try {
+    const session = await requireSession();
+    if (!session) return unauthorizedResponse();
+    const userId = session.userId!;
+
     // Persons with their linked identities
-    const allPersons = await db.select().from(persons);
-    const allIdentities = await db.select().from(platformIdentities);
+    const allPersons = await db
+      .select()
+      .from(persons)
+      .where(eq(persons.userId, userId));
+    const allIdentities = await db
+      .select()
+      .from(platformIdentities)
+      .where(eq(platformIdentities.userId, userId));
 
     const personsWithIdentities = allPersons.map((person) => ({
       ...person,

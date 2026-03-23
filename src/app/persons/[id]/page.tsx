@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { PostCard } from "@/components/PostCard";
+import { UserNav } from "@/components/UserNav";
 
 interface Identity {
   id: number;
@@ -108,6 +109,7 @@ export default function PersonPage() {
 
   return (
     <main className="main">
+      <UserNav />
       <div className="header">
         <img
           src="/logo-horizontal.svg"
