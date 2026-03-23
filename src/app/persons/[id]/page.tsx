@@ -15,10 +15,22 @@ interface Identity {
 interface PostData {
   id: number;
   platform: string;
+  platformPostId: string;
+  postUrl: string | null;
   content: string | null;
   contentHtml: string | null;
   media: Array<{ type: string; url: string; alt: string }> | null;
+  replyToId: string | null;
   repostOfId: string | null;
+  quotedPost: {
+    uri: string;
+    authorHandle: string;
+    authorDisplayName?: string;
+    authorAvatar?: string;
+    text: string;
+    media?: Array<{ type: string; url: string; alt: string }>;
+    postedAt?: string;
+  } | null;
   likeCount: number | null;
   repostCount: number | null;
   replyCount: number | null;

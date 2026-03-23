@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
 import { posts, platformIdentities, persons } from "@/db/schema";
-import { eq, lt, desc, isNotNull } from "drizzle-orm";
+import { eq, lt, desc, isNull, and } from "drizzle-orm";
 
 export async function GET(request: NextRequest) {
   try {
@@ -12,7 +12,13 @@ export async function GET(request: NextRequest) {
     // Fetch extra to account for dedup collapsing
     const fetchLimit = Math.ceil(limit * 1.5);
 
-    let query = db
+    // Filter out replies in SQL so pagination isn't broken
+    const conditions = [isNull(posts.replyToId)];
+    if (cursor) {
+      conditions.push(lt(posts.postedAt, new Date(cursor)));
+    }
+
+    const query = db
       .select({
         post: posts,
         identity: platformIdentities,
@@ -24,12 +30,9 @@ export async function GET(request: NextRequest) {
         eq(posts.platformIdentityId, platformIdentities.id)
       )
       .leftJoin(persons, eq(platformIdentities.personId, persons.id))
+      .where(and(...conditions))
       .orderBy(desc(posts.postedAt))
       .limit(fetchLimit);
-
-    if (cursor) {
-      query = query.where(lt(posts.postedAt, new Date(cursor))) as typeof query;
-    }
 
     const rows = await query;
 
@@ -39,11 +42,13 @@ export async function GET(request: NextRequest) {
       id: number;
       platform: string;
       platformPostId: string;
+      postUrl: string | null;
       content: string | null;
       contentHtml: string | null;
       media: unknown;
       replyToId: string | null;
       repostOfId: string | null;
+      quotedPost: unknown;
       likeCount: number | null;
       repostCount: number | null;
       replyCount: number | null;
@@ -79,11 +84,13 @@ export async function GET(request: NextRequest) {
         id: row.post.id,
         platform: row.post.platform,
         platformPostId: row.post.platformPostId,
+        postUrl: row.post.postUrl || null,
         content: row.post.content,
         contentHtml: row.post.contentHtml,
-        media: row.post.media,
+        media: typeof row.post.media === "string" ? JSON.parse(row.post.media) : row.post.media,
         replyToId: row.post.replyToId,
         repostOfId: row.post.repostOfId,
+        quotedPost: typeof row.post.quotedPost === "string" ? JSON.parse(row.post.quotedPost) : row.post.quotedPost,
         likeCount: row.post.likeCount,
         repostCount: row.post.repostCount,
         replyCount: row.post.replyCount,

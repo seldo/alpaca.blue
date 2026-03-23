@@ -59,11 +59,13 @@ export const posts = mysqlTable(
       .notNull(),
     platform: varchar("platform", { length: 50 }).notNull(),
     platformPostId: varchar("platform_post_id", { length: 255 }).notNull(), // ID on the originating platform
+    postUrl: text("post_url"), // canonical URL to the post on its home platform
     content: text("content"),
     contentHtml: text("content_html"), // rendered HTML (Mastodon provides this)
     media: json("media"), // array of { type, url, alt } objects
     replyToId: varchar("reply_to_id", { length: 255 }), // platform post ID of parent
     repostOfId: varchar("repost_of_id", { length: 255 }), // if this is a repost/boost
+    quotedPost: json("quoted_post"), // embedded/quoted post data { uri, authorHandle, authorDisplayName, authorAvatar, text, media, postedAt }
     likeCount: int("like_count").default(0),
     repostCount: int("repost_count").default(0),
     replyCount: int("reply_count").default(0),

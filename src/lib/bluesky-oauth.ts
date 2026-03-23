@@ -38,9 +38,16 @@ export async function getBlueskyOAuthClient(): Promise<BrowserOAuthClient> {
   let clientId: string;
 
   if (isLocalhost) {
-    // Reuse cached CIMD client ID to avoid re-registering every time
+    // Reuse cached CIMD client ID to avoid re-registering every time.
+    // Persist in localStorage so it survives page reloads — otherwise
+    // session restoration fails because the client_id no longer matches.
+    const storageKey = "alpaca_cimd_client_id";
+    const stored = localStorage.getItem(storageKey);
     if (cachedClientId) {
       clientId = cachedClientId;
+    } else if (stored) {
+      clientId = stored;
+      cachedClientId = stored;
     } else {
       const cimdRes = await fetch("https://cimd-service.fly.dev/clients", {
         method: "POST",
@@ -62,6 +69,7 @@ export async function getBlueskyOAuthClient(): Promise<BrowserOAuthClient> {
       const cimdData = await cimdRes.json();
       clientId = cimdData.client_id;
       cachedClientId = clientId;
+      localStorage.setItem(storageKey, clientId);
     }
   } else {
     clientId = `${origin}/api/client-metadata`;
@@ -94,6 +102,7 @@ export async function getBlueskyOAuthClient(): Promise<BrowserOAuthClient> {
 export async function clearBlueskySession() {
   cachedClient = null;
   cachedClientId = null;
+  localStorage.removeItem("alpaca_cimd_client_id");
 
   // The library stores DPoP keys and session data in IndexedDB
   const databases = await indexedDB.databases();

@@ -9,6 +9,16 @@ import { createHash } from "crypto";
 
 // ── Types ──────────────────────────────────────────────────
 
+export interface QuotedPostData {
+  uri: string;
+  authorHandle: string;
+  authorDisplayName?: string;
+  authorAvatar?: string;
+  text: string;
+  media?: Array<{ type: string; url: string; alt: string }>;
+  postedAt?: string;
+}
+
 export interface BlueskyPostData {
   uri: string;
   authorDid: string;
@@ -22,10 +32,12 @@ export interface BlueskyPostData {
   repostOfUri?: string;
   repostedByHandle?: string;
   images?: Array<{ url: string; alt: string }>;
+  quotedPost?: QuotedPostData;
 }
 
 interface MastodonStatus {
   id: string;
+  url: string; // canonical URL on the author's instance
   content: string;
   created_at: string;
   favourites_count: number;
@@ -123,6 +135,7 @@ export async function storeBlueskyPosts(
           media: media && media.length > 0 ? media : null,
           replyToId: post.replyToUri || null,
           repostOfId: post.repostOfUri || null,
+          quotedPost: post.quotedPost || null,
           likeCount: post.likeCount || 0,
           repostCount: post.repostCount || 0,
           replyCount: post.replyCount || 0,
@@ -132,6 +145,7 @@ export async function storeBlueskyPosts(
         .onDuplicateKeyUpdate({
           set: {
             content: post.text || "",
+            quotedPost: post.quotedPost || null,
             likeCount: post.likeCount || 0,
             repostCount: post.repostCount || 0,
             replyCount: post.replyCount || 0,
@@ -219,6 +233,7 @@ export async function fetchAndStoreMastodonPosts(): Promise<{
           platformIdentityId: identity.id,
           platform: "mastodon",
           platformPostId: actual.id,
+          postUrl: actual.url || null,
           content: plainContent,
           contentHtml: actual.content,
           media: media.length > 0 ? media : null,
@@ -234,6 +249,7 @@ export async function fetchAndStoreMastodonPosts(): Promise<{
           set: {
             content: plainContent,
             contentHtml: actual.content,
+            postUrl: actual.url || null,
             likeCount: actual.favourites_count || 0,
             repostCount: actual.reblogs_count || 0,
             replyCount: actual.replies_count || 0,

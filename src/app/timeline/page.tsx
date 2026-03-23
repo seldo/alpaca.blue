@@ -11,10 +11,22 @@ import { PostCard } from "@/components/PostCard";
 interface PostData {
   id: number;
   platform: string;
+  platformPostId: string;
+  postUrl: string | null;
   content: string | null;
   contentHtml: string | null;
   media: Array<{ type: string; url: string; alt: string }> | null;
+  replyToId: string | null;
   repostOfId: string | null;
+  quotedPost: {
+    uri: string;
+    authorHandle: string;
+    authorDisplayName?: string;
+    authorAvatar?: string;
+    text: string;
+    media?: Array<{ type: string; url: string; alt: string }>;
+    postedAt?: string;
+  } | null;
   likeCount: number | null;
   repostCount: number | null;
   replyCount: number | null;
@@ -32,6 +44,102 @@ interface PostData {
     displayName: string | null;
   } | null;
   alsoPostedOn: string[];
+}
+
+interface BlueskyImage {
+  thumb: string;
+  alt: string;
+  fullsize: string;
+}
+
+// Extract images from any Bluesky embed type
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractBlueskyImages(embed: any): Array<{ url: string; alt: string }> {
+  if (!embed) return [];
+
+  const images: Array<{ url: string; alt: string }> = [];
+
+  // app.bsky.embed.images#view — direct image embed
+  if (embed.images && Array.isArray(embed.images)) {
+    for (const img of embed.images as BlueskyImage[]) {
+      images.push({ url: img.fullsize || img.thumb, alt: img.alt || "" });
+    }
+  }
+
+  // app.bsky.embed.recordWithMedia#view — quote post with media
+  if (embed.media?.images && Array.isArray(embed.media.images)) {
+    for (const img of embed.media.images as BlueskyImage[]) {
+      images.push({ url: img.fullsize || img.thumb, alt: img.alt || "" });
+    }
+  }
+
+  // app.bsky.embed.video#view — video with thumbnail
+  if (embed.playlist && embed.thumbnail) {
+    images.push({ url: embed.thumbnail, alt: "Video thumbnail" });
+  }
+  if (embed.media?.playlist && embed.media?.thumbnail) {
+    images.push({ url: embed.media.thumbnail, alt: "Video thumbnail" });
+  }
+
+  // app.bsky.embed.external#view — link card with thumbnail
+  if (embed.external?.thumb) {
+    images.push({ url: embed.external.thumb, alt: embed.external.title || "" });
+  }
+
+  return images;
+}
+
+// Extract quoted post from record embeds
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractQuotedPost(embed: any): {
+  uri: string;
+  authorHandle: string;
+  authorDisplayName?: string;
+  authorAvatar?: string;
+  text: string;
+  media?: Array<{ type: string; url: string; alt: string }>;
+  postedAt?: string;
+} | undefined {
+  if (!embed) return undefined;
+
+  // The record lives at embed.record for both record#view and recordWithMedia#view
+  const record = embed.record?.record ?? embed.record;
+
+  // Must be a viewRecord with author and value
+  if (!record?.author || !record?.value) return undefined;
+  // Skip if it's a viewNotFound or viewBlocked
+  if (record.$type && !record.$type.includes("viewRecord")) return undefined;
+
+  const quoted: {
+    uri: string;
+    authorHandle: string;
+    authorDisplayName?: string;
+    authorAvatar?: string;
+    text: string;
+    media?: Array<{ type: string; url: string; alt: string }>;
+    postedAt?: string;
+  } = {
+    uri: record.uri,
+    authorHandle: record.author.handle,
+    authorDisplayName: record.author.displayName || undefined,
+    authorAvatar: record.author.avatar || undefined,
+    text: (record.value as { text?: string })?.text || "",
+    postedAt: record.indexedAt || (record.value as { createdAt?: string })?.createdAt,
+  };
+
+  // Check if the quoted post itself has embedded images
+  if (record.embeds && Array.isArray(record.embeds) && record.embeds.length > 0) {
+    const embeddedImages = extractBlueskyImages(record.embeds[0]);
+    if (embeddedImages.length > 0) {
+      quoted.media = embeddedImages.map((img) => ({
+        type: "image",
+        url: img.url,
+        alt: img.alt,
+      }));
+    }
+  }
+
+  return quoted;
 }
 
 export default function TimelinePage() {
@@ -111,19 +219,8 @@ export default function TimelinePage() {
                 (item.post.record as { reply?: { parent?: { uri?: string } } })
                   ?.reply?.parent?.uri || undefined,
               repostOfUri: item.reason ? item.post.uri : undefined,
-              images:
-                (
-                  item.post.embed as {
-                    images?: Array<{
-                      thumb: string;
-                      alt: string;
-                      fullsize: string;
-                    }>;
-                  }
-                )?.images?.map((img) => ({
-                  url: img.fullsize || img.thumb,
-                  alt: img.alt || "",
-                })) || [],
+              images: extractBlueskyImages(item.post.embed),
+              quotedPost: extractQuotedPost(item.post.embed),
             }));
 
             await fetch("/api/posts/fetch", {
