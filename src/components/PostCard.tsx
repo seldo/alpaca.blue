@@ -1,6 +1,70 @@
 "use client";
 
+import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
+
+function ImageModal({
+  images,
+  index,
+  onClose,
+  onNavigate,
+}: {
+  images: Array<{ url: string; alt: string }>;
+  index: number;
+  onClose: () => void;
+  onNavigate: (newIndex: number) => void;
+}) {
+  const hasPrev = index > 0;
+  const hasNext = index < images.length - 1;
+  const showArrows = images.length > 1;
+
+  useEffect(() => {
+    function handleKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+      if (e.key === "ArrowLeft" && hasPrev) onNavigate(index - 1);
+      if (e.key === "ArrowRight" && hasNext) onNavigate(index + 1);
+    }
+    document.addEventListener("keydown", handleKey);
+    return () => document.removeEventListener("keydown", handleKey);
+  }, [onClose, onNavigate, index, hasPrev, hasNext]);
+
+  const current = images[index];
+
+  return (
+    <div className="image-modal-overlay" onClick={(e) => { e.stopPropagation(); onClose(); }}>
+      <button className="image-modal-close" onClick={onClose}>
+        &times;
+      </button>
+      {showArrows && hasPrev && (
+        <button
+          className="image-modal-arrow image-modal-prev"
+          onClick={(e) => { e.stopPropagation(); onNavigate(index - 1); }}
+        >
+          &#8249;
+        </button>
+      )}
+      <img
+        src={current.url}
+        alt={current.alt}
+        className="image-modal-img"
+        onClick={(e) => e.stopPropagation()}
+      />
+      {showArrows && hasNext && (
+        <button
+          className="image-modal-arrow image-modal-next"
+          onClick={(e) => { e.stopPropagation(); onNavigate(index + 1); }}
+        >
+          &#8250;
+        </button>
+      )}
+      {showArrows && (
+        <div className="image-modal-counter">
+          {index + 1} / {images.length}
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface MediaItem {
   type: string;
@@ -127,11 +191,29 @@ export function PostCard({ post }: { post: PostData }) {
   const postUrl = getPostUrl(post);
   const profileUrl = getProfileUrl(author);
   const router = useRouter();
+  const [modalState, setModalState] = useState<{
+    images: Array<{ url: string; alt: string }>;
+    index: number;
+  } | null>(null);
+
+  const openImageModal = useCallback(
+    (images: Array<{ url: string; alt: string }>, index: number, e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setModalState({ images, index });
+    },
+    []
+  );
 
   function handleCardClick(e: React.MouseEvent) {
-    // Don't navigate if clicking a link, button, or image inside an <a>
+    // Don't navigate if clicking a link, button, image, or anything in the media area
     const target = e.target as HTMLElement;
-    if (target.closest("a") || target.closest("button")) return;
+    if (
+      target.closest("a") ||
+      target.closest("button") ||
+      target.tagName === "IMG" ||
+      target.closest(".post-media")
+    ) return;
     router.push(`/posts/${post.id}`);
   }
 
@@ -213,14 +295,18 @@ export function PostCard({ post }: { post: PostData }) {
           className={`post-media ${mediaItems.length === 1 ? "single" : "grid"}`}
         >
           {mediaItems.map((m, i) => (
-            <a key={i} href={m.url} target="_blank" rel="noopener noreferrer">
-              <img
-                src={m.url}
-                alt={m.alt || ""}
-                className="post-media-img"
-                loading="lazy"
-              />
-            </a>
+            <img
+              key={i}
+              src={m.url}
+              alt={m.alt || ""}
+              className="post-media-img post-media-img-clickable"
+              loading="lazy"
+              onClick={(e) => openImageModal(
+                mediaItems.map((mi) => ({ url: mi.url, alt: mi.alt || "" })),
+                i,
+                e
+              )}
+            />
           ))}
         </div>
       )}
@@ -228,23 +314,46 @@ export function PostCard({ post }: { post: PostData }) {
       {post.quotedPost && post.quotedPost.authorHandle && (() => {
         const qp = post.quotedPost;
         const qpUrl = getQuotedPostUrl(qp);
-        const qpProfileUrl = `https://bsky.app/profile/${qp.authorHandle}`;
+
+        async function handleQuotedPostClick(e: React.MouseEvent) {
+          e.stopPropagation();
+          const target = e.target as HTMLElement;
+          if (target.closest("a") || target.closest("button") || target.tagName === "IMG") return;
+
+          if (!qp.uri) return;
+
+          try {
+            const res = await fetch("/api/posts/lookup", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                uri: qp.uri,
+                authorHandle: qp.authorHandle,
+                authorDisplayName: qp.authorDisplayName,
+                authorAvatar: qp.authorAvatar,
+                text: qp.text,
+                media: qp.media,
+                postedAt: qp.postedAt,
+              }),
+            });
+            const data = await res.json();
+            if (data.id) {
+              router.push(`/posts/${data.id}`);
+            }
+          } catch {
+            // If lookup fails, open on platform as fallback
+            if (qpUrl) window.open(qpUrl, "_blank");
+          }
+        }
+
         return (
-          <div className="quoted-post">
+          <div className="quoted-post quoted-post-clickable" onClick={handleQuotedPostClick}>
             <div className="quoted-post-author">
               {qp.authorAvatar && (
-                <a href={qpProfileUrl} target="_blank" rel="noopener noreferrer">
-                  <img src={qp.authorAvatar} alt="" className="quoted-post-avatar" />
-                </a>
+                <img src={qp.authorAvatar} alt="" className="quoted-post-avatar" />
               )}
               <span className="quoted-post-name">
-                {qpUrl ? (
-                  <a href={qpUrl} target="_blank" rel="noopener noreferrer" className="quoted-post-name-link">
-                    {qp.authorDisplayName || qp.authorHandle}
-                  </a>
-                ) : (
-                  qp.authorDisplayName || qp.authorHandle
-                )}
+                {qp.authorDisplayName || qp.authorHandle}
               </span>
               <span className="quoted-post-handle">@{qp.authorHandle}</span>
             </div>
@@ -256,9 +365,18 @@ export function PostCard({ post }: { post: PostData }) {
             {qp.media && qp.media.length > 0 && (
               <div className={`post-media ${qp.media.length === 1 ? "single" : "grid"}`}>
                 {qp.media.map((m, i) => (
-                  <a key={i} href={m.url} target="_blank" rel="noopener noreferrer">
-                    <img src={m.url} alt={m.alt || ""} className="post-media-img" loading="lazy" />
-                  </a>
+                  <img
+                    key={i}
+                    src={m.url}
+                    alt={m.alt || ""}
+                    className="post-media-img post-media-img-clickable"
+                    loading="lazy"
+                    onClick={(e) => openImageModal(
+                      qp.media!.map((mi) => ({ url: mi.url, alt: mi.alt || "" })),
+                      i,
+                      e
+                    )}
+                  />
                 ))}
               </div>
             )}
@@ -277,6 +395,15 @@ export function PostCard({ post }: { post: PostData }) {
           <span className="post-stat">{formatCount(post.likeCount)} likes</span>
         ) : null}
       </div>
+
+      {modalState && (
+        <ImageModal
+          images={modalState.images}
+          index={modalState.index}
+          onClose={() => setModalState(null)}
+          onNavigate={(newIndex) => setModalState({ ...modalState, index: newIndex })}
+        />
+      )}
     </article>
   );
 }

@@ -19,6 +19,7 @@ export const users = mysqlTable(
     blueskyDid: varchar("bluesky_did", { length: 255 }).notNull(),
     blueskyHandle: varchar("bluesky_handle", { length: 255 }).notNull(),
     displayName: varchar("display_name", { length: 255 }),
+    avatarUrl: text("avatar_url"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },

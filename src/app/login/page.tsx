@@ -45,6 +45,8 @@ export default function LoginPage() {
           body: JSON.stringify({
             handle: profile.data.handle,
             did: result.session.did,
+            avatarUrl: profile.data.avatar || null,
+            displayName: profile.data.displayName || null,
           }),
         });
 

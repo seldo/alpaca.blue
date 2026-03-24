@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import { PostCard } from "@/components/PostCard";
-import { UserNav } from "@/components/UserNav";
+import { AppLayout } from "@/components/AppHeader";
 
 interface Identity {
   id: number;
@@ -108,24 +108,7 @@ export default function PersonPage() {
   }
 
   return (
-    <main className="main">
-      <UserNav />
-      <div className="header">
-        <img
-          src="/logo-horizontal.svg"
-          alt="alpaca.blue"
-          className="header-logo"
-        />
-        <p>{personName || "Person"}</p>
-      </div>
-
-      <nav className="page-nav">
-        <a href="/timeline" className="link">
-          Timeline
-        </a>
-        <span className="nav-sep">/</span>
-        <span className="nav-current">{personName}</span>
-      </nav>
+    <AppLayout>
 
       {loading && (
         <div className="spinner-container">
@@ -187,6 +170,6 @@ export default function PersonPage() {
           </section>
         </>
       )}
-    </main>
+    </AppLayout>
   );
 }

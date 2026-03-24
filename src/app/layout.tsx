@@ -25,6 +25,11 @@ export default function RootLayout({
           rel="stylesheet"
         />
         <link rel="icon" href="/logomark.svg" type="image/svg+xml" />
+        <link rel="icon" href="/favicon-32.png" sizes="32x32" type="image/png" />
+        <link rel="icon" href="/favicon-16.png" sizes="16x16" type="image/png" />
+        <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+        <link rel="manifest" href="/manifest.json" />
+        <meta name="theme-color" content="#008DFF" />
       </head>
       <body>{children}</body>
     </html>

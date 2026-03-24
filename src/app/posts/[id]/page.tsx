@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useParams } from "next/navigation";
 import { PostCard } from "@/components/PostCard";
-import { UserNav } from "@/components/UserNav";
+import { AppLayout } from "@/components/AppHeader";
 
 interface PostData {
   id: number;
@@ -68,27 +68,7 @@ export default function PostPage() {
   }, [params.id]);
 
   return (
-    <main className="main">
-      <UserNav />
-      <div className="header">
-        <img
-          src="/logo-horizontal.svg"
-          alt="alpaca.blue"
-          className="header-logo"
-        />
-      </div>
-
-      <nav className="page-nav">
-        <a href="/" className="link">
-          Accounts
-        </a>
-        <span className="nav-sep">/</span>
-        <a href="/timeline" className="link">
-          Timeline
-        </a>
-        <span className="nav-sep">/</span>
-        <span className="nav-current">Post</span>
-      </nav>
+    <AppLayout>
 
       {loading && (
         <div className="spinner-container">
@@ -107,6 +87,6 @@ export default function PostPage() {
           <PostCard post={post} />
         </div>
       )}
-    </main>
+    </AppLayout>
   );
 }

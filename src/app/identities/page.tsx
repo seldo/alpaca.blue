@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { SuggestionCard } from "@/components/SuggestionCard";
 import { PersonCard } from "@/components/PersonCard";
-import { UserNav } from "@/components/UserNav";
+import { AppLayout } from "@/components/AppHeader";
 
 interface Identity {
   id: number;
@@ -86,22 +86,7 @@ export default function IdentitiesPage() {
   }
 
   return (
-    <main className="main">
-      <UserNav />
-      <div className="header">
-        <img
-          src="/logo-horizontal.svg"
-          alt="alpaca.blue"
-          className="header-logo"
-        />
-        <p>Identity Resolution</p>
-      </div>
-
-      <nav className="page-nav">
-        <a href="/" className="link">
-          Back to accounts
-        </a>
-      </nav>
+    <AppLayout>
 
       {loading && (
         <div className="spinner-container">
@@ -175,6 +160,6 @@ export default function IdentitiesPage() {
           )}
         </>
       )}
-    </main>
+    </AppLayout>
   );
 }

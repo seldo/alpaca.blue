@@ -23,5 +23,6 @@ export async function GET() {
     id: user.id,
     blueskyHandle: user.blueskyHandle,
     displayName: user.displayName,
+    avatarUrl: user.avatarUrl,
   });
 }

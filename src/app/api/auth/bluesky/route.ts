@@ -8,7 +8,7 @@ import { getSession } from "@/lib/session";
 // Creates or finds the user by Bluesky DID, sets the session, and saves the connected account.
 export async function POST(request: NextRequest) {
   try {
-    const { handle, did } = await request.json();
+    const { handle, did, avatarUrl, displayName } = await request.json();
 
     if (!handle || !did) {
       return NextResponse.json(
@@ -28,6 +28,8 @@ export async function POST(request: NextRequest) {
       const [result] = await db.insert(users).values({
         blueskyDid: did,
         blueskyHandle: handle,
+        displayName: displayName || null,
+        avatarUrl: avatarUrl || null,
       });
       [user] = await db
         .select()
@@ -35,10 +37,14 @@ export async function POST(request: NextRequest) {
         .where(eq(users.id, result.insertId))
         .limit(1);
     } else {
-      // Update handle in case it changed
+      // Update handle/avatar in case they changed
       await db
         .update(users)
-        .set({ blueskyHandle: handle })
+        .set({
+          blueskyHandle: handle,
+          ...(displayName ? { displayName } : {}),
+          ...(avatarUrl ? { avatarUrl } : {}),
+        })
         .where(eq(users.id, user.id));
     }
 

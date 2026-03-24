@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { MastodonConnect } from "@/components/MastodonConnect";
 import { ConnectedAccount } from "@/components/ConnectedAccount";
-import { UserNav } from "@/components/UserNav";
+import { AppLayout } from "@/components/AppHeader";
 
 interface Account {
   id: number;
@@ -38,12 +38,7 @@ export default function Home() {
   const mastodonConnected = accounts.some((a) => a.platform === "mastodon");
 
   return (
-    <main className="main">
-      <UserNav />
-      <div className="header">
-        <img src="/logo-horizontal.svg" alt="alpaca.blue" className="header-logo" />
-        <p>Your unified social timeline</p>
-      </div>
+    <AppLayout>
 
       {loading && (
         <div className="spinner-container">
@@ -101,6 +96,6 @@ export default function Home() {
           )}
         </>
       )}
-    </main>
+    </AppLayout>
   );
 }
