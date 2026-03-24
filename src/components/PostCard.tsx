@@ -114,6 +114,18 @@ interface PostData {
 interface BlueskyAgentLike {
   like: (uri: string, cid: string) => Promise<{ uri: string }>;
   deleteLike: (uri: string) => Promise<void>;
+  repost: (uri: string, cid: string) => Promise<{ uri: string }>;
+  post: (record: {
+    text: string;
+    reply?: {
+      root: { uri: string; cid: string };
+      parent: { uri: string; cid: string };
+    };
+    embed?: {
+      $type: string;
+      record: { uri: string; cid: string };
+    };
+  }) => Promise<{ uri: string; cid: string }>;
 }
 
 function getPostUrl(post: PostData): string | null {
@@ -204,6 +216,19 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
   const [favorited, setFavorited] = useState(false);
   const [localLikeCount, setLocalLikeCount] = useState(post.likeCount || 0);
   const [favoriting, setFavoriting] = useState(false);
+  const [replyOpen, setReplyOpen] = useState(false);
+  const [replyText, setReplyText] = useState("");
+  const [replying, setReplying] = useState(false);
+  const [replySuccess, setReplySuccess] = useState(false);
+  const [localReplyCount, setLocalReplyCount] = useState(post.replyCount || 0);
+  const [reposted, setReposted] = useState(false);
+  const [localRepostCount, setLocalRepostCount] = useState(post.repostCount || 0);
+  const [reposting, setReposting] = useState(false);
+  const [repostMenuOpen, setRepostMenuOpen] = useState(false);
+  const [quoteOpen, setQuoteOpen] = useState(false);
+  const [quoteText, setQuoteText] = useState("");
+  const [quoting, setQuoting] = useState(false);
+  const [quoteSuccess, setQuoteSuccess] = useState(false);
 
   const openImageModal = useCallback(
     (images: Array<{ url: string; alt: string }>, index: number, e: React.MouseEvent) => {
@@ -251,6 +276,157 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
     }
   }
 
+  function handleReplyToggle(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (replySuccess) {
+      setReplySuccess(false);
+      setReplyText("");
+    }
+    setReplyOpen(!replyOpen);
+  }
+
+  async function handleReplySubmit(e: React.FormEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (replying || !replyText.trim()) return;
+    setReplying(true);
+
+    try {
+      if (post.platform === "bluesky") {
+        if (!blueskyAgent || !post.platformPostCid) {
+          console.warn("Cannot reply: missing agent or CID");
+          return;
+        }
+        const ref = { uri: post.platformPostId, cid: post.platformPostCid };
+        await blueskyAgent.post({
+          text: replyText.trim(),
+          reply: { root: ref, parent: ref },
+        });
+        setReplySuccess(true);
+        setReplyText("");
+        setLocalReplyCount((c) => c + 1);
+      } else if (post.platform === "mastodon") {
+        const res = await fetch(`/api/posts/${post.id}/reply`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: replyText.trim() }),
+        });
+        if (res.ok) {
+          setReplySuccess(true);
+          setReplyText("");
+          setLocalReplyCount((c) => c + 1);
+        } else {
+          const data = await res.json();
+          console.error("Reply failed:", data.error);
+        }
+      }
+    } catch (err) {
+      console.error("Reply error:", err);
+    } finally {
+      setReplying(false);
+    }
+  }
+
+  function handleRepostMenuToggle(e: React.MouseEvent) {
+    e.stopPropagation();
+    setRepostMenuOpen(!repostMenuOpen);
+  }
+
+  async function handleRepost(e: React.MouseEvent) {
+    e.stopPropagation();
+    setRepostMenuOpen(false);
+    if (reposting) return;
+    setReposting(true);
+
+    try {
+      if (post.platform === "bluesky") {
+        if (!blueskyAgent || !post.platformPostCid) {
+          console.warn("Cannot repost: missing agent or CID");
+          return;
+        }
+        if (reposted) return; // Can't undo Bluesky reposts without stored URI
+        await blueskyAgent.repost(post.platformPostId, post.platformPostCid);
+        setReposted(true);
+        setLocalRepostCount((c) => c + 1);
+      } else if (post.platform === "mastodon") {
+        const res = await fetch(`/api/posts/${post.id}/repost`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ undo: reposted }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setReposted(data.reblogged);
+          setLocalRepostCount(data.repostCount);
+        }
+      }
+    } catch (err) {
+      console.error("Repost error:", err);
+    } finally {
+      setReposting(false);
+    }
+  }
+
+  function handleQuoteOpen(e: React.MouseEvent) {
+    e.stopPropagation();
+    setRepostMenuOpen(false);
+    if (quoteSuccess) {
+      setQuoteSuccess(false);
+      setQuoteText("");
+    }
+    setQuoteOpen(!quoteOpen);
+  }
+
+  async function handleQuoteSubmit(e: React.FormEvent) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (quoting || !quoteText.trim()) return;
+    setQuoting(true);
+
+    try {
+      if (post.platform === "bluesky") {
+        if (!blueskyAgent || !post.platformPostCid) {
+          console.warn("Cannot quote: missing agent or CID");
+          return;
+        }
+        await blueskyAgent.post({
+          text: quoteText.trim(),
+          embed: {
+            $type: "app.bsky.embed.record",
+            record: { uri: post.platformPostId, cid: post.platformPostCid },
+          },
+        });
+        setQuoteSuccess(true);
+        setQuoteText("");
+      } else if (post.platform === "mastodon") {
+        // Mastodon doesn't support native quote posts — post as a standalone status with the URL
+        const postLink = post.postUrl || "";
+        const fullText = `${quoteText.trim()}\n\n${postLink}`.trim();
+        const res = await fetch(`/api/posts/${post.id}/reply`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: fullText, quote: true }),
+        });
+        if (res.ok) {
+          setQuoteSuccess(true);
+          setQuoteText("");
+        }
+      }
+    } catch (err) {
+      console.error("Quote error:", err);
+    } finally {
+      setQuoting(false);
+    }
+  }
+
+  // Close repost menu when clicking outside
+  useEffect(() => {
+    if (!repostMenuOpen) return;
+    function handleClick() { setRepostMenuOpen(false); }
+    document.addEventListener("click", handleClick);
+    return () => document.removeEventListener("click", handleClick);
+  }, [repostMenuOpen]);
+
   function handleCardClick(e: React.MouseEvent) {
     // Don't navigate if clicking a link, button, image, or anything in the media area
     const target = e.target as HTMLElement;
@@ -258,7 +434,12 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
       target.closest("a") ||
       target.closest("button") ||
       target.tagName === "IMG" ||
-      target.closest(".post-media")
+      target.closest(".post-media") ||
+      target.closest(".post-reply-composer") ||
+      target.closest(".post-quote-composer") ||
+      target.closest(".post-repost-menu") ||
+      target.closest("textarea") ||
+      target.closest("form")
     ) return;
     router.push(`/posts/${post.id}`);
   }
@@ -431,23 +612,40 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
       })()}
 
       <div className="post-engagement">
-        {post.replyCount ? (
-          <span className="post-stat">
-            <svg className="post-stat-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-            </svg>
-            {formatCount(post.replyCount)}
-          </span>
-        ) : null}
-        {post.repostCount ? (
-          <span className="post-stat">
+        <button
+          className={`post-reply-btn${replyOpen ? " post-reply-active" : ""}`}
+          onClick={handleReplyToggle}
+          title="Reply"
+        >
+          <svg className="post-stat-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+          </svg>
+          {localReplyCount > 0 && <span>{formatCount(localReplyCount)}</span>}
+        </button>
+        <div className="post-repost-wrapper">
+          <button
+            className={`post-repost-btn${reposted ? " post-reposted" : ""}`}
+            onClick={handleRepostMenuToggle}
+            disabled={reposting}
+            title="Repost"
+          >
             <svg className="post-stat-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M17 1l4 4-4 4" /><path d="M3 11V9a4 4 0 0 1 4-4h14" />
               <path d="M7 23l-4-4 4-4" /><path d="M21 13v2a4 4 0 0 1-4 4H3" />
             </svg>
-            {formatCount(post.repostCount)}
-          </span>
-        ) : null}
+            {localRepostCount > 0 && <span>{formatCount(localRepostCount)}</span>}
+          </button>
+          {repostMenuOpen && (
+            <div className="post-repost-menu" onClick={(e) => e.stopPropagation()}>
+              <button className="post-repost-menu-item" onClick={handleRepost}>
+                {reposted ? "Undo repost" : "Repost"}
+              </button>
+              <button className="post-repost-menu-item" onClick={handleQuoteOpen}>
+                Quote post
+              </button>
+            </div>
+          )}
+        </div>
         <button
           className={`post-favorite-btn${favorited ? " post-favorited" : ""}`}
           onClick={handleFavorite}
@@ -460,6 +658,105 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
           {localLikeCount > 0 && <span>{formatCount(localLikeCount)}</span>}
         </button>
       </div>
+
+      {replyOpen && (
+        <div className="post-reply-composer" onClick={(e) => e.stopPropagation()}>
+          {replySuccess ? (
+            <div className="post-reply-success">
+              Reply sent!
+              <button
+                className="post-reply-success-close"
+                onClick={(e) => { e.stopPropagation(); setReplyOpen(false); setReplySuccess(false); }}
+              >
+                Dismiss
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={handleReplySubmit} className="post-reply-form">
+              <textarea
+                className="post-reply-input"
+                placeholder={`Reply on ${post.platform === "bluesky" ? "Bluesky" : "Mastodon"}...`}
+                value={replyText}
+                onChange={(e) => setReplyText(e.target.value)}
+                rows={3}
+                maxLength={post.platform === "bluesky" ? 300 : 500}
+                disabled={replying}
+                autoFocus
+              />
+              <div className="post-reply-actions">
+                <span className="post-reply-charcount">
+                  {replyText.length}/{post.platform === "bluesky" ? 300 : 500}
+                </span>
+                <button
+                  type="submit"
+                  className="btn btn-primary post-reply-submit"
+                  disabled={replying || !replyText.trim()}
+                >
+                  {replying ? "Sending..." : "Reply"}
+                </button>
+              </div>
+            </form>
+          )}
+        </div>
+      )}
+
+      {quoteOpen && (
+        <div className="post-quote-composer" onClick={(e) => e.stopPropagation()}>
+          {quoteSuccess ? (
+            <div className="post-reply-success">
+              Quote posted!
+              <button
+                className="post-reply-success-close"
+                onClick={(e) => { e.stopPropagation(); setQuoteOpen(false); setQuoteSuccess(false); }}
+              >
+                Dismiss
+              </button>
+            </div>
+          ) : (
+            <form onSubmit={handleQuoteSubmit} className="post-reply-form">
+              <div className="post-quote-preview">
+                <span className="post-quote-preview-author">
+                  {post.author?.displayName || post.author?.handle}
+                </span>
+                <span className="post-quote-preview-text">
+                  {(post.content || "").slice(0, 100)}{(post.content || "").length > 100 ? "..." : ""}
+                </span>
+              </div>
+              <textarea
+                className="post-reply-input"
+                placeholder={`Add your comment${post.platform === "mastodon" ? " (link will be appended)" : ""}...`}
+                value={quoteText}
+                onChange={(e) => setQuoteText(e.target.value)}
+                rows={3}
+                maxLength={post.platform === "bluesky" ? 300 : 500}
+                disabled={quoting}
+                autoFocus
+              />
+              <div className="post-reply-actions">
+                <span className="post-reply-charcount">
+                  {quoteText.length}/{post.platform === "bluesky" ? 300 : 500}
+                </span>
+                <div style={{ display: "flex", gap: "8px" }}>
+                  <button
+                    type="button"
+                    className="btn btn-outline"
+                    onClick={(e) => { e.stopPropagation(); setQuoteOpen(false); }}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="btn btn-primary post-reply-submit"
+                    disabled={quoting || !quoteText.trim()}
+                  >
+                    {quoting ? "Posting..." : "Quote"}
+                  </button>
+                </div>
+              </div>
+            </form>
+          )}
+        </div>
+      )}
 
       {modalState && (
         <ImageModal

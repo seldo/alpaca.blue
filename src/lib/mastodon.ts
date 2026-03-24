@@ -33,7 +33,7 @@ export async function registerMastodonApp(
     body: JSON.stringify({
       client_name: "alpaca.blue",
       redirect_uris: getRedirectUri(appOrigin),
-      scopes: "read write:favourites",
+      scopes: "read write:favourites write:statuses",
       website: "https://alpaca.blue",
     }),
   });
@@ -55,7 +55,7 @@ export function getMastodonAuthUrl(
     client_id: clientId,
     redirect_uri: getRedirectUri(appOrigin),
     response_type: "code",
-    scope: "read write:favourites",
+    scope: "read write:favourites write:statuses",
   });
 
   return `${instanceUrl}/oauth/authorize?${params.toString()}`;
@@ -78,7 +78,7 @@ export async function exchangeMastodonToken(
       redirect_uri: getRedirectUri(appOrigin),
       grant_type: "authorization_code",
       code,
-      scope: "read write:favourites",
+      scope: "read write:favourites write:statuses",
     }),
   });
 
