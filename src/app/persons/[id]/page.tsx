@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import {
   getBlueskyOAuthClient,
   getBlueskyAgent,
@@ -56,6 +56,7 @@ interface PostData {
 
 export default function PersonPage() {
   const params = useParams();
+  const router = useRouter();
   const personId = params.id as string;
 
   const [personName, setPersonName] = useState<string>("");
@@ -138,6 +139,13 @@ export default function PersonPage() {
 
   return (
     <AppLayout>
+      <button className="back-btn" onClick={() => router.back()}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M19 12H5" />
+          <polyline points="12 19 5 12 12 5" />
+        </svg>
+        Back
+      </button>
 
       {loading && (
         <div className="spinner-container">

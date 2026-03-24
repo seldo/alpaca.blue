@@ -267,6 +267,28 @@ body {
   }
 }
 
+/* Back button — mobile only */
+.back-btn {
+  display: none;
+}
+
+@media (max-width: 639px) {
+  .back-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: none;
+    border: none;
+    color: var(--color-primary);
+    font-family: inherit;
+    font-size: 0.9rem;
+    font-weight: 500;
+    cursor: pointer;
+    padding: 4px 0;
+    margin-bottom: 12px;
+  }
+}
+
 /* Bottom bar — mobile only */
 .app-bottombar {
   display: none;
