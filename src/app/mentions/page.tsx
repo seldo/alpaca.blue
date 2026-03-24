@@ -59,19 +59,14 @@ interface BlueskyFacet {
   features: BlueskyFacetFeature[];
 }
 
-// Convert Bluesky text + facets into HTML with clickable links, mentions, and hashtags.
-// Facets use byte offsets into UTF-8 encoded text.
 function facetsToHtml(text: string, facets?: BlueskyFacet[]): string {
   if (!facets || facets.length === 0) {
     return linkifyUrls(escapeHtml(text));
   }
 
-  // Convert string to UTF-8 bytes for correct indexing
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
   const bytes = encoder.encode(text);
-
-  // Sort facets by byte start position
   const sorted = [...facets].sort((a, b) => a.index.byteStart - b.index.byteStart);
 
   let html = "";
@@ -81,14 +76,10 @@ function facetsToHtml(text: string, facets?: BlueskyFacet[]): string {
     const { byteStart, byteEnd } = facet.index;
     if (byteStart < lastByte || byteEnd > bytes.length) continue;
 
-    // Add text before this facet (linkify any bare URLs in it)
     html += linkifyUrls(escapeHtml(decoder.decode(bytes.slice(lastByte, byteStart))));
-
-    // Get the facet text
     const facetText = escapeHtml(decoder.decode(bytes.slice(byteStart, byteEnd)));
-
-    // Apply the first recognized feature
     const feature = facet.features[0];
+
     if (feature?.$type === "app.bsky.richtext.facet#link" && feature.uri) {
       html += `<a href="${escapeAttr(feature.uri)}" target="_blank" rel="noopener noreferrer">${facetText}</a>`;
     } else if (feature?.$type === "app.bsky.richtext.facet#mention" && feature.did) {
@@ -98,13 +89,10 @@ function facetsToHtml(text: string, facets?: BlueskyFacet[]): string {
     } else {
       html += facetText;
     }
-
     lastByte = byteEnd;
   }
 
-  // Add remaining text after last facet (linkify any bare URLs in it)
   html += linkifyUrls(escapeHtml(decoder.decode(bytes.slice(lastByte))));
-
   return html;
 }
 
@@ -116,117 +104,14 @@ function linkifyUrls(escaped: string): string {
 }
 
 function escapeHtml(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
 function escapeAttr(str: string): string {
-  return str
-    .replace(/&/g, "&amp;")
-    .replace(/"/g, "&quot;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+  return str.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
-interface BlueskyImage {
-  thumb: string;
-  alt: string;
-  fullsize: string;
-}
-
-// Extract images from any Bluesky embed type
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function extractBlueskyImages(embed: any): Array<{ url: string; alt: string }> {
-  if (!embed) return [];
-
-  const images: Array<{ url: string; alt: string }> = [];
-
-  // app.bsky.embed.images#view — direct image embed
-  if (embed.images && Array.isArray(embed.images)) {
-    for (const img of embed.images as BlueskyImage[]) {
-      images.push({ url: img.fullsize || img.thumb, alt: img.alt || "" });
-    }
-  }
-
-  // app.bsky.embed.recordWithMedia#view — quote post with media
-  if (embed.media?.images && Array.isArray(embed.media.images)) {
-    for (const img of embed.media.images as BlueskyImage[]) {
-      images.push({ url: img.fullsize || img.thumb, alt: img.alt || "" });
-    }
-  }
-
-  // app.bsky.embed.video#view — video with thumbnail
-  if (embed.playlist && embed.thumbnail) {
-    images.push({ url: embed.thumbnail, alt: "Video thumbnail" });
-  }
-  if (embed.media?.playlist && embed.media?.thumbnail) {
-    images.push({ url: embed.media.thumbnail, alt: "Video thumbnail" });
-  }
-
-  // app.bsky.embed.external#view — link card with thumbnail
-  if (embed.external?.thumb) {
-    images.push({ url: embed.external.thumb, alt: embed.external.title || "" });
-  }
-
-  return images;
-}
-
-// Extract quoted post from record embeds
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-function extractQuotedPost(embed: any): {
-  uri: string;
-  authorHandle: string;
-  authorDisplayName?: string;
-  authorAvatar?: string;
-  text: string;
-  media?: Array<{ type: string; url: string; alt: string }>;
-  postedAt?: string;
-} | undefined {
-  if (!embed) return undefined;
-
-  // The record lives at embed.record for both record#view and recordWithMedia#view
-  const record = embed.record?.record ?? embed.record;
-
-  // Must be a viewRecord with author and value
-  if (!record?.author || !record?.value) return undefined;
-  // Skip if it's a viewNotFound or viewBlocked
-  if (record.$type && !record.$type.includes("viewRecord")) return undefined;
-
-  const quoted: {
-    uri: string;
-    authorHandle: string;
-    authorDisplayName?: string;
-    authorAvatar?: string;
-    text: string;
-    media?: Array<{ type: string; url: string; alt: string }>;
-    postedAt?: string;
-  } = {
-    uri: record.uri,
-    authorHandle: record.author.handle,
-    authorDisplayName: record.author.displayName || undefined,
-    authorAvatar: record.author.avatar || undefined,
-    text: (record.value as { text?: string })?.text || "",
-    postedAt: record.indexedAt || (record.value as { createdAt?: string })?.createdAt,
-  };
-
-  // Check if the quoted post itself has embedded images
-  if (record.embeds && Array.isArray(record.embeds) && record.embeds.length > 0) {
-    const embeddedImages = extractBlueskyImages(record.embeds[0]);
-    if (embeddedImages.length > 0) {
-      quoted.media = embeddedImages.map((img) => ({
-        type: "image",
-        url: img.url,
-        alt: img.alt,
-      }));
-    }
-  }
-
-  return quoted;
-}
-
-export default function TimelinePage() {
+export default function MentionsPage() {
   const [posts, setPosts] = useState<PostData[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -255,16 +140,15 @@ export default function TimelinePage() {
           setBlueskyAgent(agent);
         }
       } catch {
-        // No Bluesky session — that's okay, we'll still show Mastodon posts
+        // No Bluesky session
       }
     })();
   }, []);
 
-  const fetchTimeline = useCallback(
-    async (cursor?: string, type?: string) => {
-      const params = new URLSearchParams({ limit: "50" });
+  const fetchMentions = useCallback(
+    async (cursor?: string) => {
+      const params = new URLSearchParams({ limit: "50", type: "mentions" });
       if (cursor) params.set("cursor", cursor);
-      if (type) params.set("type", type);
 
       const res = await fetch(`/api/timeline?${params}`);
       const data = await res.json();
@@ -275,83 +159,65 @@ export default function TimelinePage() {
     []
   );
 
-  // Map a Bluesky post item to our BlueskyPostData shape
-  function mapBlueskyPost(
-    item: { post: Record<string, unknown>; reason?: unknown },
-    postType?: string
-  ) {
-    const post = item.post as {
-      uri: string;
-      author: { did: string; handle: string; avatar?: string; displayName?: string };
-      record: { text?: string; facets?: BlueskyFacet[]; reply?: { parent?: { uri?: string } } };
-      indexedAt: string;
-      likeCount?: number;
-      repostCount?: number;
-      replyCount?: number;
-      embed?: unknown;
-    };
-    const text = post.record?.text || "";
-    const contentHtml = facetsToHtml(text, post.record?.facets);
-    return {
-      uri: post.uri,
-      authorDid: post.author.did,
-      authorHandle: post.author.handle,
-      text,
-      contentHtml,
-      createdAt: post.indexedAt,
-      likeCount: post.likeCount,
-      repostCount: post.repostCount,
-      replyCount: post.replyCount,
-      replyToUri: post.record?.reply?.parent?.uri || undefined,
-      repostOfUri: item.reason ? post.uri : undefined,
-      images: extractBlueskyImages(post.embed),
-      quotedPost: extractQuotedPost(post.embed),
-      postType,
-    };
-  }
-
-  // Fetch posts from both platforms, then load the timeline
   const refreshFeed = useCallback(async () => {
-    sessionStorage.removeItem("timeline_cache");
-    sessionStorage.removeItem("timeline_scroll");
+    sessionStorage.removeItem("mentions_cache");
+    sessionStorage.removeItem("mentions_scroll");
     setFetching(true);
-    setFetchStatus("Fetching posts...");
+    setFetchStatus("Fetching mentions...");
 
     try {
       const promises: Promise<unknown>[] = [];
       const agent = agentRef.current;
 
+      // Bluesky mentions via notifications
       if (agent?.did) {
         promises.push(
           (async () => {
-            setFetchStatus("Fetching Bluesky timeline...");
-            const response = await agent.getTimeline({ limit: 50 });
-            const blueskyPosts = response.data.feed.map((item) =>
-              mapBlueskyPost(item as unknown as { post: Record<string, unknown>; reason?: unknown })
-            );
-            await fetch("/api/posts/fetch", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ platform: "bluesky", posts: blueskyPosts }),
-            });
+            setFetchStatus("Fetching Bluesky mentions...");
+            const response = await agent.listNotifications({ limit: 50 });
+            const mentionPosts = response.data.notifications
+              .filter((n: { reason: string }) => n.reason === "mention" || n.reason === "reply")
+              .map((n: { author: { did: string; handle: string }; record: unknown; uri: string; indexedAt: string }) => {
+                const record = n.record as { text?: string; facets?: BlueskyFacet[]; reply?: { parent?: { uri?: string } } };
+                const text = record?.text || "";
+                const contentHtml = facetsToHtml(text, record?.facets);
+                return {
+                  uri: n.uri,
+                  authorDid: n.author.did,
+                  authorHandle: n.author.handle,
+                  text,
+                  contentHtml,
+                  createdAt: n.indexedAt,
+                  replyToUri: record?.reply?.parent?.uri || undefined,
+                  postType: "mention",
+                };
+              });
+            if (mentionPosts.length > 0) {
+              await fetch("/api/posts/fetch", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ platform: "bluesky", posts: mentionPosts }),
+              });
+            }
           })()
         );
       }
 
+      // Mastodon mentions
       promises.push(
         (async () => {
-          setFetchStatus("Fetching Mastodon timeline...");
+          setFetchStatus("Fetching Mastodon mentions...");
           await fetch("/api/posts/fetch", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ platform: "mastodon" }),
+            body: JSON.stringify({ platform: "mastodon", type: "mentions" }),
           });
         })()
       );
 
       await Promise.allSettled(promises);
     } catch (err) {
-      console.error("Feed fetch error:", err);
+      console.error("Mentions fetch error:", err);
     }
 
     setFetching(false);
@@ -359,33 +225,33 @@ export default function TimelinePage() {
 
     setLoading(true);
     try {
-      const data = await fetchTimeline();
+      const data = await fetchMentions();
       setPosts(data.posts);
       setNextCursor(data.nextCursor);
     } catch (err) {
-      console.error("Timeline load error:", err);
+      console.error("Mentions load error:", err);
     } finally {
       setLoading(false);
     }
-  }, [fetchTimeline]);
+  }, [fetchMentions]);
 
-  // Save timeline state to sessionStorage whenever posts or cursor change
+  // Cache mentions state
   useEffect(() => {
     if (posts.length > 0) {
       sessionStorage.setItem(
-        "timeline_cache",
+        "mentions_cache",
         JSON.stringify({ posts, nextCursor })
       );
     }
   }, [posts, nextCursor]);
 
-  // Save scroll position on scroll (debounced)
+  // Save scroll position
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
     function handleScroll() {
       clearTimeout(timer);
       timer = setTimeout(() => {
-        sessionStorage.setItem("timeline_scroll", String(window.scrollY));
+        sessionStorage.setItem("mentions_scroll", String(window.scrollY));
       }, 100);
     }
     window.addEventListener("scroll", handleScroll, { passive: true });
@@ -395,8 +261,9 @@ export default function TimelinePage() {
     };
   }, []);
 
+  // Restore from cache or fetch fresh
   useEffect(() => {
-    const cached = sessionStorage.getItem("timeline_cache");
+    const cached = sessionStorage.getItem("mentions_cache");
     if (cached) {
       try {
         const { posts: cachedPosts, nextCursor: cachedCursor } = JSON.parse(cached);
@@ -404,22 +271,20 @@ export default function TimelinePage() {
           setPosts(cachedPosts);
           setNextCursor(cachedCursor);
           setLoading(false);
-          const savedScroll = sessionStorage.getItem("timeline_scroll");
+          const savedScroll = sessionStorage.getItem("mentions_scroll");
           if (savedScroll) {
             pendingScrollRestore.current = parseInt(savedScroll);
           }
           return;
         }
       } catch {
-        // Invalid cache, fall through to fresh fetch
+        // Fall through
       }
     }
-
     const timer = setTimeout(refreshFeed, 500);
     return () => clearTimeout(timer);
   }, [refreshFeed]);
 
-  // Restore scroll position after posts have rendered
   useLayoutEffect(() => {
     if (pendingScrollRestore.current !== null && posts.length > 0) {
       window.scrollTo(0, pendingScrollRestore.current);
@@ -431,7 +296,7 @@ export default function TimelinePage() {
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
     try {
-      const data = await fetchTimeline(nextCursor);
+      const data = await fetchMentions(nextCursor);
       setPosts((prev) => [...prev, ...data.posts]);
       setNextCursor(data.nextCursor);
     } catch (err) {
@@ -443,7 +308,6 @@ export default function TimelinePage() {
 
   return (
     <AppLayout>
-
       <div className="timeline-actions">
         <button
           onClick={refreshFeed}
@@ -462,7 +326,7 @@ export default function TimelinePage() {
 
       {!loading && posts.length === 0 && (
         <p className="text-muted" style={{ textAlign: "center", padding: "40px 0" }}>
-          No posts yet. Make sure you&apos;ve connected and imported your accounts, then hit Refresh.
+          No mentions yet. Hit Refresh to check for new mentions.
         </p>
       )}
 

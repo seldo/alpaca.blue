@@ -45,7 +45,7 @@ export function MastodonConnect() {
       <form onSubmit={handleSubmit} className="form-group">
         <input
           type="text"
-          placeholder="Instance (e.g. mastodon.social)"
+          placeholder="Instance or handle (e.g. mastodon.social or @you@mastodon.social)"
           value={instanceUrl}
           onChange={(e) => setInstanceUrl(e.target.value)}
           className="input focus-mastodon"

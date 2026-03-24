@@ -2,6 +2,7 @@
 
 import { useState, useEffect, type ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
+import { clearBlueskySession, setBlueskyAgent } from "@/lib/bluesky-oauth";
 
 interface UserInfo {
   id: number;
@@ -23,8 +24,18 @@ export function AppLayout({ children }: { children: ReactNode }) {
   }, []);
 
   async function handleLogout() {
+    // Clear server session
     await fetch("/api/auth/logout", { method: "POST" });
+    // Clear cached agent and session storage
+    setBlueskyAgent(null);
+    sessionStorage.clear();
+    // Navigate away first, then clear Bluesky OAuth storage
+    // (clearing IndexedDB while the OAuth client is active causes "database closed" errors)
     router.push("/login");
+    // Small delay to let navigation start before wiping IndexedDB
+    setTimeout(() => {
+      clearBlueskySession().catch(() => {});
+    }, 100);
   }
 
   return (
@@ -70,6 +81,17 @@ export function AppLayout({ children }: { children: ReactNode }) {
                 <line x1="17" y1="18" x2="3" y2="18" />
               </svg>
               <span className="app-sidebar-label">Timeline</span>
+            </a>
+            <a
+              href="/mentions"
+              className={`app-sidebar-item${pathname === "/mentions" ? " app-sidebar-active" : ""}`}
+              title="Mentions"
+            >
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="4" />
+                <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94" />
+              </svg>
+              <span className="app-sidebar-label">Mentions</span>
             </a>
             <a
               href="/identities"

@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import type { BrowserOAuthClient } from "@atproto/oauth-client-browser";
-import { getBlueskyOAuthClient, setBlueskyAgent } from "@/lib/bluesky-oauth";
+import { getBlueskyOAuthClient, setBlueskyAgent, clearBlueskySession } from "@/lib/bluesky-oauth";
 
 export default function LoginPage() {
   const [handle, setHandle] = useState("");
@@ -20,11 +20,25 @@ export default function LoginPage() {
 
   async function initOAuth() {
     try {
-      const client = await getBlueskyOAuthClient();
+      let client = await getBlueskyOAuthClient();
       clientRef.current = client;
 
       // Check if returning from OAuth redirect
-      const result = await client.init();
+      let result;
+      try {
+        result = await client.init();
+      } catch (initErr) {
+        // "database closed" can happen if IndexedDB was cleared during logout
+        // while the cached client still held a reference. Retry with a fresh client.
+        if (initErr instanceof Error && initErr.message.includes("database")) {
+          await clearBlueskySession();
+          client = await getBlueskyOAuthClient();
+          clientRef.current = client;
+          result = await client.init();
+        } else {
+          throw initErr;
+        }
+      }
 
       if (result?.session) {
         setStatus("Logging in...");

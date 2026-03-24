@@ -12,13 +12,21 @@ export async function GET(request: NextRequest) {
 
     const { searchParams } = new URL(request.url);
     const cursor = searchParams.get("cursor");
+    const type = searchParams.get("type"); // "mentions" or null (default timeline)
     const limit = Math.min(parseInt(searchParams.get("limit") || "50"), 100);
 
     // Fetch extra to account for dedup collapsing
     const fetchLimit = Math.ceil(limit * 1.5);
 
-    // Filter out replies in SQL so pagination isn't broken
-    const conditions = [isNull(posts.replyToId), eq(posts.userId, userId)];
+    const conditions = [eq(posts.userId, userId)];
+    if (type === "mentions") {
+      // Mentions: show mention-type posts (including replies)
+      conditions.push(eq(posts.postType, "mention"));
+    } else {
+      // Timeline: show timeline posts, filter out replies
+      conditions.push(eq(posts.postType, "timeline"));
+      conditions.push(isNull(posts.replyToId));
+    }
     if (cursor) {
       conditions.push(lt(posts.postedAt, new Date(cursor)));
     }

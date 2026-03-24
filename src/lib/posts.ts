@@ -34,6 +34,7 @@ export interface BlueskyPostData {
   repostedByHandle?: string;
   images?: Array<{ url: string; alt: string }>;
   quotedPost?: QuotedPostData;
+  postType?: string; // "timeline" | "mention"
 }
 
 interface MastodonStatus {
@@ -115,8 +116,8 @@ export async function storeBlueskyPosts(
 
   for (const post of postsData) {
     try {
-      // Look up the platform identity for this author
-      const [identity] = await db
+      // Look up the platform identity for this author, create if missing (for mentions)
+      let [identity] = await db
         .select()
         .from(platformIdentities)
         .where(
@@ -128,7 +129,22 @@ export async function storeBlueskyPosts(
         )
         .limit(1);
 
-      if (!identity) continue; // Skip posts from unknown authors
+      if (!identity) {
+        if (post.postType === "mention") {
+          // Create identity on the fly for mention authors we don't follow
+          const [result] = await db.insert(platformIdentities).values({
+            userId,
+            platform: "bluesky",
+            handle: post.authorHandle,
+            did: post.authorDid,
+            profileUrl: `https://bsky.app/profile/${post.authorHandle}`,
+            isFollowed: false,
+          });
+          identity = { id: result.insertId } as typeof identity;
+        } else {
+          continue; // Skip timeline posts from unknown authors
+        }
+      }
 
       const postedAt = new Date(post.createdAt);
       const dedupeHash = computeDedupeHash(post.text || "", postedAt);
@@ -142,6 +158,7 @@ export async function storeBlueskyPosts(
         .insert(posts)
         .values({
           userId,
+          postType: post.postType || "timeline",
           platformIdentityId: identity.id,
           platform: "bluesky",
           platformPostId: post.uri,
@@ -285,6 +302,135 @@ export async function fetchAndStoreMastodonPosts(
       stored++;
     } catch (err) {
       console.error(`Failed to store Mastodon status ${status.id}:`, err);
+    }
+  }
+
+  return { stored };
+}
+
+// ── Fetch & store Mastodon mentions ──────────────────────
+
+interface MastodonNotification {
+  id: string;
+  type: string; // "mention", "favourite", "reblog", "follow", etc.
+  created_at: string;
+  status: MastodonStatus | null;
+}
+
+export async function fetchAndStoreMastodonMentions(
+  userId: number
+): Promise<{ stored: number }> {
+  const [account] = await db
+    .select()
+    .from(connectedAccounts)
+    .where(
+      and(
+        eq(connectedAccounts.userId, userId),
+        eq(connectedAccounts.platform, "mastodon")
+      )
+    )
+    .limit(1);
+
+  if (!account?.accessToken || !account.instanceUrl) {
+    throw new Error("Not authenticated with Mastodon");
+  }
+
+  const instanceUrl = account.instanceUrl;
+  const instanceHost = new URL(instanceUrl).hostname;
+
+  const response = await fetch(
+    `${instanceUrl}/api/v1/notifications?types[]=mention&limit=40`,
+    {
+      headers: { Authorization: `Bearer ${account.accessToken}` },
+    }
+  );
+
+  if (!response.ok) {
+    throw new Error(`Mastodon mentions fetch failed: ${response.status}`);
+  }
+
+  const notifications: MastodonNotification[] = await response.json();
+  let stored = 0;
+
+  for (const notification of notifications) {
+    if (!notification.status) continue;
+    const status = notification.status;
+
+    try {
+      const acct = status.account.acct;
+      const handle = acct.includes("@")
+        ? `@${acct}`
+        : `@${acct}@${instanceHost}`;
+
+      let [identity] = await db
+        .select()
+        .from(platformIdentities)
+        .where(
+          and(
+            eq(platformIdentities.userId, userId),
+            eq(platformIdentities.platform, "mastodon"),
+            eq(platformIdentities.handle, handle)
+          )
+        )
+        .limit(1);
+
+      if (!identity) {
+        const [result] = await db.insert(platformIdentities).values({
+          userId,
+          platform: "mastodon",
+          handle,
+          did: status.account.id,
+          displayName: status.account.display_name || null,
+          avatarUrl: status.account.avatar || null,
+          profileUrl: status.account.url,
+          isFollowed: false,
+        });
+        identity = { id: result.insertId } as typeof identity;
+      }
+
+      const plainContent = stripHtmlTags(status.content);
+      const postedAt = new Date(status.created_at);
+      const dedupeHash = computeDedupeHash(plainContent, postedAt);
+      const media = status.media_attachments.map((m) => ({
+        type: m.type,
+        url: m.url,
+        alt: m.description || "",
+      }));
+
+      await db
+        .insert(posts)
+        .values({
+          userId,
+          postType: "mention",
+          platformIdentityId: identity.id,
+          platform: "mastodon",
+          platformPostId: status.id,
+          postUrl: status.url || null,
+          content: plainContent,
+          contentHtml: status.content,
+          media: media.length > 0 ? media : null,
+          replyToId: status.in_reply_to_id || null,
+          likeCount: status.favourites_count || 0,
+          repostCount: status.reblogs_count || 0,
+          replyCount: status.replies_count || 0,
+          postedAt,
+          dedupeHash,
+        })
+        .onDuplicateKeyUpdate({
+          set: {
+            content: plainContent,
+            contentHtml: status.content,
+            postUrl: status.url || null,
+            likeCount: status.favourites_count || 0,
+            repostCount: status.reblogs_count || 0,
+            replyCount: status.replies_count || 0,
+            fetchedAt: new Date(),
+          },
+        });
+
+      stored++;
+    } catch (err) {
+      console.error(`Failed to store Mastodon mention ${notification.id}:`, err);
     }
   }
 

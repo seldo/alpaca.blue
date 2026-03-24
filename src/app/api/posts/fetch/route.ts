@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { storeBlueskyPosts, fetchAndStoreMastodonPosts } from "@/lib/posts";
+import {
+  storeBlueskyPosts,
+  fetchAndStoreMastodonPosts,
+  fetchAndStoreMastodonMentions,
+} from "@/lib/posts";
 import { requireSession, unauthorizedResponse } from "@/lib/session";
 
 export async function POST(request: NextRequest) {
@@ -9,7 +13,7 @@ export async function POST(request: NextRequest) {
     const userId = session.userId!;
 
     const body = await request.json();
-    const { platform } = body;
+    const { platform, type } = body;
 
     if (platform === "bluesky") {
       const { posts } = body;
@@ -24,6 +28,14 @@ export async function POST(request: NextRequest) {
     }
 
     if (platform === "mastodon") {
+      if (type === "mentions") {
+        const result = await fetchAndStoreMastodonMentions(userId);
+        return NextResponse.json({
+          platform: "mastodon",
+          type: "mentions",
+          stored: result.stored,
+        });
+      }
       const result = await fetchAndStoreMastodonPosts(userId);
       return NextResponse.json({
         platform: "mastodon",

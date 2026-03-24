@@ -23,8 +23,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Normalize the instance URL
+    // Normalize the instance URL — handle full handles like @user@instance.social
     let normalizedUrl = instanceUrl.trim();
+    // Extract domain from a handle like @user@instance.social
+    const handleMatch = normalizedUrl.match(/@?[^@]+@(.+)/);
+    if (handleMatch) {
+      normalizedUrl = handleMatch[1];
+    }
     if (!normalizedUrl.startsWith("https://")) {
       normalizedUrl = `https://${normalizedUrl}`;
     }
