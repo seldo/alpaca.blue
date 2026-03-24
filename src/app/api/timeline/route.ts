@@ -55,6 +55,7 @@ export async function GET(request: NextRequest) {
       id: number;
       platform: string;
       platformPostId: string;
+      platformPostCid: string | null;
       postUrl: string | null;
       content: string | null;
       contentHtml: string | null;
@@ -103,6 +104,7 @@ export async function GET(request: NextRequest) {
         id: row.post.id,
         platform: row.post.platform,
         platformPostId: row.post.platformPostId,
+        platformPostCid: row.post.platformPostCid || null,
         postUrl: row.post.postUrl || null,
         content: row.post.content,
         contentHtml: row.post.contentHtml,

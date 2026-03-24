@@ -13,6 +13,7 @@ interface PostData {
   id: number;
   platform: string;
   platformPostId: string;
+  platformPostCid?: string | null;
   postUrl: string | null;
   content: string | null;
   contentHtml: string | null;
@@ -282,6 +283,7 @@ export default function TimelinePage() {
   ) {
     const post = item.post as {
       uri: string;
+      cid: string;
       author: { did: string; handle: string; avatar?: string; displayName?: string };
       record: { text?: string; facets?: BlueskyFacet[]; reply?: { parent?: { uri?: string } } };
       indexedAt: string;
@@ -294,6 +296,7 @@ export default function TimelinePage() {
     const contentHtml = facetsToHtml(text, post.record?.facets);
     return {
       uri: post.uri,
+      cid: post.cid,
       authorDid: post.author.did,
       authorHandle: post.author.handle,
       text,
@@ -469,7 +472,7 @@ export default function TimelinePage() {
       {!loading && (
         <div className="timeline-feed">
           {posts.map((post) => (
-            <PostCard key={`${post.platform}-${post.id}`} post={post} />
+            <PostCard key={`${post.platform}-${post.id}`} post={post} blueskyAgent={agentRef.current} />
           ))}
 
           {nextCursor && (

@@ -1,7 +1,12 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useParams } from "next/navigation";
+import {
+  getBlueskyOAuthClient,
+  getBlueskyAgent,
+  setBlueskyAgent,
+} from "@/lib/bluesky-oauth";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
 
@@ -9,6 +14,7 @@ interface PostData {
   id: number;
   platform: string;
   platformPostId: string;
+  platformPostCid?: string | null;
   postUrl: string | null;
   content: string | null;
   contentHtml: string | null;
@@ -48,6 +54,29 @@ export default function PostPage() {
   const [post, setPost] = useState<PostData | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const agentRef = useRef<import("@atproto/api").Agent | null>(null);
+
+  useEffect(() => {
+    const existing = getBlueskyAgent();
+    if (existing) {
+      agentRef.current = existing;
+      return;
+    }
+    (async () => {
+      try {
+        const client = await getBlueskyOAuthClient();
+        const result = await client.init();
+        if (result?.session) {
+          const { Agent } = await import("@atproto/api");
+          const agent = new Agent(result.session);
+          agentRef.current = agent;
+          setBlueskyAgent(agent);
+        }
+      } catch {
+        // No Bluesky session
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     async function fetchPost() {
@@ -84,7 +113,7 @@ export default function PostPage() {
 
       {post && (
         <div className="timeline-feed">
-          <PostCard post={post} />
+          <PostCard post={post} blueskyAgent={agentRef.current} />
         </div>
       )}
     </AppLayout>

@@ -69,6 +69,7 @@ export async function GET(
         id: post.id,
         platform: post.platform,
         platformPostId: post.platformPostId,
+        platformPostCid: post.platformPostCid || null,
         postUrl: post.postUrl || null,
         content: post.content,
         contentHtml: post.contentHtml,

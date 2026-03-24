@@ -76,6 +76,7 @@ interface PostData {
   id: number;
   platform: string;
   platformPostId: string;
+  platformPostCid?: string | null;
   postUrl: string | null;
   content: string | null;
   contentHtml: string | null;
@@ -108,6 +109,11 @@ interface PostData {
     displayName: string | null;
   } | null;
   alsoPostedOn?: Array<{ platform: string; postUrl: string | null }>;
+}
+
+interface BlueskyAgentLike {
+  like: (uri: string, cid: string) => Promise<{ uri: string }>;
+  deleteLike: (uri: string) => Promise<void>;
 }
 
 function getPostUrl(post: PostData): string | null {
@@ -178,7 +184,7 @@ function formatCount(n: number | null): string {
   return String(n);
 }
 
-export function PostCard({ post }: { post: PostData }) {
+export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?: BlueskyAgentLike | null }) {
   const author = post.author;
   const mediaItems: MediaItem[] = Array.isArray(post.media)
     ? post.media
@@ -195,6 +201,9 @@ export function PostCard({ post }: { post: PostData }) {
     images: Array<{ url: string; alt: string }>;
     index: number;
   } | null>(null);
+  const [favorited, setFavorited] = useState(false);
+  const [localLikeCount, setLocalLikeCount] = useState(post.likeCount || 0);
+  const [favoriting, setFavoriting] = useState(false);
 
   const openImageModal = useCallback(
     (images: Array<{ url: string; alt: string }>, index: number, e: React.MouseEvent) => {
@@ -204,6 +213,43 @@ export function PostCard({ post }: { post: PostData }) {
     },
     []
   );
+
+  async function handleFavorite(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (favoriting) return;
+    setFavoriting(true);
+
+    try {
+      if (post.platform === "bluesky") {
+        if (!blueskyAgent || !post.platformPostCid) {
+          console.warn("Cannot favorite: missing agent or CID");
+          return;
+        }
+        if (favorited) {
+          // We don't have the like URI stored, so we can't unfavorite Bluesky posts yet
+          return;
+        }
+        await blueskyAgent.like(post.platformPostId, post.platformPostCid);
+        setFavorited(true);
+        setLocalLikeCount((c) => c + 1);
+      } else if (post.platform === "mastodon") {
+        const res = await fetch(`/api/posts/${post.id}/favorite`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ unfavorite: favorited }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          setFavorited(data.favorited);
+          setLocalLikeCount(data.likeCount);
+        }
+      }
+    } catch (err) {
+      console.error("Favorite error:", err);
+    } finally {
+      setFavoriting(false);
+    }
+  }
 
   function handleCardClick(e: React.MouseEvent) {
     // Don't navigate if clicking a link, button, image, or anything in the media area
@@ -386,14 +432,33 @@ export function PostCard({ post }: { post: PostData }) {
 
       <div className="post-engagement">
         {post.replyCount ? (
-          <span className="post-stat">{formatCount(post.replyCount)} replies</span>
+          <span className="post-stat">
+            <svg className="post-stat-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+            {formatCount(post.replyCount)}
+          </span>
         ) : null}
         {post.repostCount ? (
-          <span className="post-stat">{formatCount(post.repostCount)} reposts</span>
+          <span className="post-stat">
+            <svg className="post-stat-icon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M17 1l4 4-4 4" /><path d="M3 11V9a4 4 0 0 1 4-4h14" />
+              <path d="M7 23l-4-4 4-4" /><path d="M21 13v2a4 4 0 0 1-4 4H3" />
+            </svg>
+            {formatCount(post.repostCount)}
+          </span>
         ) : null}
-        {post.likeCount ? (
-          <span className="post-stat">{formatCount(post.likeCount)} likes</span>
-        ) : null}
+        <button
+          className={`post-favorite-btn${favorited ? " post-favorited" : ""}`}
+          onClick={handleFavorite}
+          disabled={favoriting}
+          title={favorited ? "Unfavorite" : "Favorite"}
+        >
+          <svg className="post-stat-icon" width="16" height="16" viewBox="0 0 24 24" fill={favorited ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M20.84 4.61a5.5 5.5 0 0 0-7.78 0L12 5.67l-1.06-1.06a5.5 5.5 0 0 0-7.78 7.78l1.06 1.06L12 21.23l7.78-7.78 1.06-1.06a5.5 5.5 0 0 0 0-7.78z" />
+          </svg>
+          {localLikeCount > 0 && <span>{formatCount(localLikeCount)}</span>}
+        </button>
       </div>
 
       {modalState && (

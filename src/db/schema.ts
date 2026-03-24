@@ -88,6 +88,7 @@ export const posts = mysqlTable(
       .notNull(),
     platform: varchar("platform", { length: 50 }).notNull(),
     platformPostId: varchar("platform_post_id", { length: 255 }).notNull(),
+    platformPostCid: varchar("platform_post_cid", { length: 255 }),
     postUrl: text("post_url"),
     content: text("content"),
     contentHtml: text("content_html"),

@@ -13,6 +13,7 @@ interface PostData {
   id: number;
   platform: string;
   platformPostId: string;
+  platformPostCid?: string | null;
   postUrl: string | null;
   content: string | null;
   contentHtml: string | null;
@@ -177,12 +178,13 @@ export default function MentionsPage() {
             const response = await agent.listNotifications({ limit: 50 });
             const mentionPosts = response.data.notifications
               .filter((n: { reason: string }) => n.reason === "mention" || n.reason === "reply")
-              .map((n: { author: { did: string; handle: string }; record: unknown; uri: string; indexedAt: string }) => {
+              .map((n: { author: { did: string; handle: string }; record: unknown; uri: string; cid: string; indexedAt: string }) => {
                 const record = n.record as { text?: string; facets?: BlueskyFacet[]; reply?: { parent?: { uri?: string } } };
                 const text = record?.text || "";
                 const contentHtml = facetsToHtml(text, record?.facets);
                 return {
                   uri: n.uri,
+                  cid: n.cid,
                   authorDid: n.author.did,
                   authorHandle: n.author.handle,
                   text,
@@ -333,7 +335,7 @@ export default function MentionsPage() {
       {!loading && (
         <div className="timeline-feed">
           {posts.map((post) => (
-            <PostCard key={`${post.platform}-${post.id}`} post={post} />
+            <PostCard key={`${post.platform}-${post.id}`} post={post} blueskyAgent={agentRef.current} />
           ))}
 
           {nextCursor && (

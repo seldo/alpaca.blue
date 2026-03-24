@@ -1,7 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams } from "next/navigation";
+import {
+  getBlueskyOAuthClient,
+  getBlueskyAgent,
+  setBlueskyAgent,
+} from "@/lib/bluesky-oauth";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
 
@@ -17,6 +22,7 @@ interface PostData {
   id: number;
   platform: string;
   platformPostId: string;
+  platformPostCid?: string | null;
   postUrl: string | null;
   content: string | null;
   contentHtml: string | null;
@@ -58,6 +64,29 @@ export default function PersonPage() {
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
+  const agentRef = useRef<import("@atproto/api").Agent | null>(null);
+
+  useEffect(() => {
+    const existing = getBlueskyAgent();
+    if (existing) {
+      agentRef.current = existing;
+      return;
+    }
+    (async () => {
+      try {
+        const client = await getBlueskyOAuthClient();
+        const result = await client.init();
+        if (result?.session) {
+          const { Agent } = await import("@atproto/api");
+          const agent = new Agent(result.session);
+          agentRef.current = agent;
+          setBlueskyAgent(agent);
+        }
+      } catch {
+        // No Bluesky session
+      }
+    })();
+  }, []);
 
   const fetchData = useCallback(async () => {
     try {
@@ -152,7 +181,7 @@ export default function PersonPage() {
 
             <div className="timeline-feed">
               {posts.map((post) => (
-                <PostCard key={`${post.platform}-${post.id}`} post={post} />
+                <PostCard key={`${post.platform}-${post.id}`} post={post} blueskyAgent={agentRef.current} />
               ))}
 
               {nextCursor && (

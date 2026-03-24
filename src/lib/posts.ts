@@ -21,6 +21,7 @@ export interface QuotedPostData {
 
 export interface BlueskyPostData {
   uri: string;
+  cid?: string;
   authorDid: string;
   authorHandle: string;
   text: string;
@@ -162,6 +163,7 @@ export async function storeBlueskyPosts(
           platformIdentityId: identity.id,
           platform: "bluesky",
           platformPostId: post.uri,
+          platformPostCid: post.cid || null,
           content: post.text || "",
           contentHtml: post.contentHtml || null,
           media: media && media.length > 0 ? media : null,
@@ -178,6 +180,7 @@ export async function storeBlueskyPosts(
           set: {
             content: post.text || "",
             contentHtml: post.contentHtml || null,
+            platformPostCid: post.cid || null,
             quotedPost: post.quotedPost || null,
             likeCount: post.likeCount || 0,
             repostCount: post.repostCount || 0,
