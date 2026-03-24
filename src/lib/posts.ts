@@ -24,6 +24,7 @@ export interface BlueskyPostData {
   authorDid: string;
   authorHandle: string;
   text: string;
+  contentHtml?: string;
   createdAt: string;
   likeCount?: number;
   repostCount?: number;
@@ -64,8 +65,13 @@ interface MastodonStatus {
 
 function stripHtmlTags(html: string): string {
   return html
+    // Replace <br> with space
     .replace(/<br\s*\/?>/gi, " ")
+    // Replace <a> tags with their href (Mastodon wraps URLs in spans that break them)
+    .replace(/<a\s[^>]*href="([^"]*)"[^>]*>[\s\S]*?<\/a>/gi, " $1 ")
+    // Strip remaining tags
     .replace(/<[^>]+>/g, " ")
+    // Decode entities
     .replace(/&amp;/g, "&")
     .replace(/&lt;/g, "<")
     .replace(/&gt;/g, ">")
@@ -79,10 +85,15 @@ export function computeDedupeHash(
   content: string,
   postedAt: Date
 ): string | null {
-  // Normalize: lowercase, strip URLs, collapse whitespace
+  // Normalize: lowercase, strip URLs (full and bare-domain), collapse whitespace
   const normalized = content
     .toLowerCase()
+    // Full URLs
     .replace(/https?:\/\/\S+/g, "")
+    // Bare domain URLs (e.g. "example.com/path..." from Bluesky truncation)
+    .replace(/\b[\w-]+\.[\w-]+\.\w{2,}\/\S*/g, "")
+    .replace(/\b[\w-]+\.\w{2,}\/\S*/g, "")
+    // Collapse whitespace
     .replace(/\s+/g, " ")
     .trim();
 
@@ -135,6 +146,7 @@ export async function storeBlueskyPosts(
           platform: "bluesky",
           platformPostId: post.uri,
           content: post.text || "",
+          contentHtml: post.contentHtml || null,
           media: media && media.length > 0 ? media : null,
           replyToId: post.replyToUri || null,
           repostOfId: post.repostOfUri || null,
@@ -148,6 +160,7 @@ export async function storeBlueskyPosts(
         .onDuplicateKeyUpdate({
           set: {
             content: post.text || "",
+            contentHtml: post.contentHtml || null,
             quotedPost: post.quotedPost || null,
             likeCount: post.likeCount || 0,
             repostCount: post.repostCount || 0,

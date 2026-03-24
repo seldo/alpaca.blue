@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
 import {
   getBlueskyOAuthClient,
   getBlueskyAgent,
@@ -44,7 +44,90 @@ interface PostData {
     id: number;
     displayName: string | null;
   } | null;
-  alsoPostedOn: string[];
+  alsoPostedOn: Array<{ platform: string; postUrl: string | null }>;
+}
+
+interface BlueskyFacetFeature {
+  $type: string;
+  uri?: string;
+  did?: string;
+  tag?: string;
+}
+
+interface BlueskyFacet {
+  index: { byteStart: number; byteEnd: number };
+  features: BlueskyFacetFeature[];
+}
+
+// Convert Bluesky text + facets into HTML with clickable links, mentions, and hashtags.
+// Facets use byte offsets into UTF-8 encoded text.
+function facetsToHtml(text: string, facets?: BlueskyFacet[]): string {
+  if (!facets || facets.length === 0) {
+    return linkifyUrls(escapeHtml(text));
+  }
+
+  // Convert string to UTF-8 bytes for correct indexing
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  const bytes = encoder.encode(text);
+
+  // Sort facets by byte start position
+  const sorted = [...facets].sort((a, b) => a.index.byteStart - b.index.byteStart);
+
+  let html = "";
+  let lastByte = 0;
+
+  for (const facet of sorted) {
+    const { byteStart, byteEnd } = facet.index;
+    if (byteStart < lastByte || byteEnd > bytes.length) continue;
+
+    // Add text before this facet (linkify any bare URLs in it)
+    html += linkifyUrls(escapeHtml(decoder.decode(bytes.slice(lastByte, byteStart))));
+
+    // Get the facet text
+    const facetText = escapeHtml(decoder.decode(bytes.slice(byteStart, byteEnd)));
+
+    // Apply the first recognized feature
+    const feature = facet.features[0];
+    if (feature?.$type === "app.bsky.richtext.facet#link" && feature.uri) {
+      html += `<a href="${escapeAttr(feature.uri)}" target="_blank" rel="noopener noreferrer">${facetText}</a>`;
+    } else if (feature?.$type === "app.bsky.richtext.facet#mention" && feature.did) {
+      html += `<a href="https://bsky.app/profile/${escapeAttr(feature.did)}" target="_blank" rel="noopener noreferrer">${facetText}</a>`;
+    } else if (feature?.$type === "app.bsky.richtext.facet#tag" && feature.tag) {
+      html += `<a href="https://bsky.app/hashtag/${escapeAttr(feature.tag)}" target="_blank" rel="noopener noreferrer">${facetText}</a>`;
+    } else {
+      html += facetText;
+    }
+
+    lastByte = byteEnd;
+  }
+
+  // Add remaining text after last facet (linkify any bare URLs in it)
+  html += linkifyUrls(escapeHtml(decoder.decode(bytes.slice(lastByte))));
+
+  return html;
+}
+
+function linkifyUrls(escaped: string): string {
+  return escaped.replace(
+    /(https?:\/\/[^\s<&]+)/g,
+    '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
+  );
+}
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function escapeAttr(str: string): string {
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
 interface BlueskyImage {
@@ -151,6 +234,7 @@ export default function TimelinePage() {
   const [fetchStatus, setFetchStatus] = useState("");
   const [loadingMore, setLoadingMore] = useState(false);
   const agentRef = useRef<import("@atproto/api").Agent | null>(null);
+  const pendingScrollRestore = useRef<number | null>(null);
 
   // Initialize Bluesky agent
   useEffect(() => {
@@ -192,6 +276,8 @@ export default function TimelinePage() {
 
   // Fetch posts from both platforms, then load the timeline
   const refreshFeed = useCallback(async () => {
+    sessionStorage.removeItem("timeline_cache");
+    sessionStorage.removeItem("timeline_scroll");
     setFetching(true);
     setFetchStatus("Fetching posts...");
 
@@ -206,12 +292,19 @@ export default function TimelinePage() {
           (async () => {
             setFetchStatus("Fetching Bluesky timeline...");
             const response = await agent.getTimeline({ limit: 50 });
-            const blueskyPosts = response.data.feed.map((item) => ({
+            const blueskyPosts = response.data.feed.map((item) => {
+              const record = item.post.record as {
+                text?: string;
+                facets?: BlueskyFacet[];
+              };
+              const text = record?.text || "";
+              const contentHtml = facetsToHtml(text, record?.facets);
+              return {
               uri: item.post.uri,
               authorDid: item.post.author.did,
               authorHandle: item.post.author.handle,
-              text:
-                (item.post.record as { text?: string })?.text || "",
+              text,
+              contentHtml,
               createdAt: item.post.indexedAt,
               likeCount: item.post.likeCount,
               repostCount: item.post.repostCount,
@@ -222,7 +315,7 @@ export default function TimelinePage() {
               repostOfUri: item.reason ? item.post.uri : undefined,
               images: extractBlueskyImages(item.post.embed),
               quotedPost: extractQuotedPost(item.post.embed),
-            }));
+            }; });
 
             await fetch("/api/posts/fetch", {
               method: "POST",
@@ -269,11 +362,66 @@ export default function TimelinePage() {
     }
   }, [fetchTimeline]);
 
+  // Save timeline state to sessionStorage whenever posts or cursor change
   useEffect(() => {
-    // Small delay to let agent initialize
+    if (posts.length > 0) {
+      sessionStorage.setItem(
+        "timeline_cache",
+        JSON.stringify({ posts, nextCursor })
+      );
+    }
+  }, [posts, nextCursor]);
+
+  // Save scroll position on scroll (debounced)
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    function handleScroll() {
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        sessionStorage.setItem("timeline_scroll", String(window.scrollY));
+      }, 100);
+    }
+    window.addEventListener("scroll", handleScroll, { passive: true });
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("scroll", handleScroll);
+    };
+  }, []);
+
+  useEffect(() => {
+    // Try to restore cached timeline (e.g. when navigating back)
+    const cached = sessionStorage.getItem("timeline_cache");
+    if (cached) {
+      try {
+        const { posts: cachedPosts, nextCursor: cachedCursor } = JSON.parse(cached);
+        if (cachedPosts?.length > 0) {
+          setPosts(cachedPosts);
+          setNextCursor(cachedCursor);
+          setLoading(false);
+          // Schedule scroll restore for after React renders the posts
+          const savedScroll = sessionStorage.getItem("timeline_scroll");
+          if (savedScroll) {
+            pendingScrollRestore.current = parseInt(savedScroll);
+          }
+          return;
+        }
+      } catch {
+        // Invalid cache, fall through to fresh fetch
+      }
+    }
+
+    // No cache — fetch fresh
     const timer = setTimeout(refreshFeed, 500);
     return () => clearTimeout(timer);
   }, [refreshFeed]);
+
+  // Restore scroll position after posts have rendered
+  useLayoutEffect(() => {
+    if (pendingScrollRestore.current !== null && posts.length > 0) {
+      window.scrollTo(0, pendingScrollRestore.current);
+      pendingScrollRestore.current = null;
+    }
+  }, [posts]);
 
   async function loadMore() {
     if (!nextCursor || loadingMore) return;

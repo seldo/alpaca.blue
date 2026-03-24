@@ -1,5 +1,7 @@
 "use client";
 
+import { useRouter } from "next/navigation";
+
 interface MediaItem {
   type: string;
   url: string;
@@ -41,7 +43,7 @@ interface PostData {
     id: number;
     displayName: string | null;
   } | null;
-  alsoPostedOn?: string[];
+  alsoPostedOn?: Array<{ platform: string; postUrl: string | null }>;
 }
 
 function getPostUrl(post: PostData): string | null {
@@ -124,9 +126,17 @@ export function PostCard({ post }: { post: PostData }) {
 
   const postUrl = getPostUrl(post);
   const profileUrl = getProfileUrl(author);
+  const router = useRouter();
+
+  function handleCardClick(e: React.MouseEvent) {
+    // Don't navigate if clicking a link, button, or image inside an <a>
+    const target = e.target as HTMLElement;
+    if (target.closest("a") || target.closest("button")) return;
+    router.push(`/posts/${post.id}`);
+  }
 
   return (
-    <article className="post-card">
+    <article className="post-card post-card-clickable" onClick={handleCardClick}>
       <div className="post-author">
         {author?.avatarUrl && (
           profileUrl ? (
@@ -172,9 +182,21 @@ export function PostCard({ post }: { post: PostData }) {
       {post.alsoPostedOn && post.alsoPostedOn.length > 0 && (
         <div className="post-crosspost">
           Also on{" "}
-          {post.alsoPostedOn
-            .map((p) => (p === "bluesky" ? "Bluesky" : "Mastodon"))
-            .join(", ")}
+          {post.alsoPostedOn.map((p, i) => {
+            const name = p.platform === "bluesky" ? "Bluesky" : "Mastodon";
+            return (
+              <span key={p.platform}>
+                {i > 0 && ", "}
+                {p.postUrl ? (
+                  <a href={p.postUrl} target="_blank" rel="noopener noreferrer" className="post-crosspost-link">
+                    {name}
+                  </a>
+                ) : (
+                  name
+                )}
+              </span>
+            );
+          })}
         </div>
       )}
 

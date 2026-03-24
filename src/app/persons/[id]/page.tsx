@@ -45,7 +45,7 @@ interface PostData {
     profileUrl: string | null;
   } | null;
   person: { id: number; displayName: string | null } | null;
-  alsoPostedOn: string[];
+  alsoPostedOn: Array<{ platform: string; postUrl: string | null }>;
 }
 
 export default function PersonPage() {

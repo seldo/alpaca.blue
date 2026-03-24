@@ -70,17 +70,23 @@ export async function GET(request: NextRequest) {
         id: number;
         displayName: string | null;
       } | null;
-      alsoPostedOn: string[];
+      alsoPostedOn: Array<{ platform: string; postUrl: string | null }>;
     }> = [];
 
     for (const row of rows) {
       const hash = row.post.dedupeHash;
 
       if (hash && seen.has(hash)) {
-        // Add cross-post indicator to existing entry
+        // Add cross-post indicator with link to the duplicate
         const existingIdx = seen.get(hash)!;
-        if (!result[existingIdx].alsoPostedOn.includes(row.post.platform)) {
-          result[existingIdx].alsoPostedOn.push(row.post.platform);
+        const alreadyListed = result[existingIdx].alsoPostedOn.some(
+          (p) => p.platform === row.post.platform
+        );
+        if (!alreadyListed) {
+          result[existingIdx].alsoPostedOn.push({
+            platform: row.post.platform,
+            postUrl: row.post.postUrl || null,
+          });
         }
         continue;
       }
