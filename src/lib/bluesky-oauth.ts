@@ -4,6 +4,7 @@ import type { Agent } from "@atproto/api";
 let cachedClient: BrowserOAuthClient | null = null;
 let cachedClientId: string | null = null;
 let cachedAgent: Agent | null = null;
+let restorePromise: Promise<Agent | null> | null = null;
 
 // Store/retrieve the authenticated agent so it survives across component mounts
 export function setBlueskyAgent(agent: Agent | null) {
@@ -95,6 +96,52 @@ export async function getBlueskyOAuthClient(): Promise<BrowserOAuthClient> {
 
   cachedClient = client;
   return client;
+}
+
+// Restore an existing Bluesky session.
+// client.init() is only for handling the OAuth redirect callback (URL has ?code=).
+// On all other page loads, call client.restore(did) directly.
+// Calling both causes "refresh token replayed" because init() consumes the
+// refresh token even when it returns undefined.
+export function restoreBlueskySession(): Promise<Agent | null> {
+  if (restorePromise) return restorePromise;
+  restorePromise = _restoreBlueskySession().finally(() => { restorePromise = null; });
+  return restorePromise;
+}
+
+async function _restoreBlueskySession(): Promise<Agent | null> {
+  const { Agent } = await import("@atproto/api");
+  const client = await getBlueskyOAuthClient();
+
+  const isOAuthCallback = typeof window !== "undefined" &&
+    new URLSearchParams(window.location.search).has("code");
+
+  if (isOAuthCallback) {
+    // Handle the redirect — init() exchanges the code for tokens
+    const result = await client.init();
+    if (result?.session) {
+      const agent = new Agent(result.session);
+      setBlueskyAgent(agent);
+      return agent;
+    }
+    return null;
+  }
+
+  // Normal page load — restore session directly using the DID from server session
+  try {
+    const res = await fetch("/api/auth/me");
+    if (!res.ok) return null;
+    const { blueskyDid } = await res.json();
+    if (!blueskyDid) return null;
+
+    const session = await client.restore(blueskyDid);
+    const agent = new Agent(session);
+    setBlueskyAgent(agent);
+    return agent;
+  } catch (err) {
+    console.error("[bluesky] restore(did) failed:", err);
+    return null;
+  }
 }
 
 // Clear stale DPoP keys and session data from browser storage

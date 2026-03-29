@@ -2,9 +2,9 @@
 
 import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
 import {
-  getBlueskyOAuthClient,
   getBlueskyAgent,
   setBlueskyAgent,
+  restoreBlueskySession,
 } from "@/lib/bluesky-oauth";
 import { usePullToRefresh } from "@/lib/usePullToRefresh";
 import { PostCard } from "@/components/PostCard";
@@ -138,19 +138,11 @@ export default function MentionsPage() {
     }
 
     (async () => {
-      try {
-        const client = await getBlueskyOAuthClient();
-        const result = await client.init();
-        if (result?.session) {
-          const { Agent } = await import("@atproto/api");
-          const agent = new Agent(result.session);
-          agentRef.current = agent;
-          setBlueskyAgent(agent);
-        } else {
-          setFetchError("Your Bluesky session has expired. Please log out and log back in to reconnect.");
-        }
-      } catch (err) {
-        console.error("[mentions] agent init error:", err);
+      const agent = await restoreBlueskySession();
+      if (agent) {
+        agentRef.current = agent;
+      } else {
+        setFetchError("Your Bluesky session has expired. Please log out and log back in to reconnect.");
       }
     })();
   }, []);

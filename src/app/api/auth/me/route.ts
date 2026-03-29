@@ -21,6 +21,7 @@ export async function GET() {
 
   return NextResponse.json({
     id: user.id,
+    blueskyDid: user.blueskyDid,
     blueskyHandle: user.blueskyHandle,
     displayName: user.displayName,
     avatarUrl: user.avatarUrl,
