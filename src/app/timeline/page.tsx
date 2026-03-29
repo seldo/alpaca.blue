@@ -227,12 +227,20 @@ function extractQuotedPost(embed: any): {
   return quoted;
 }
 
+function isAuthError(err: unknown): boolean {
+  if (!err || typeof err !== "object") return false;
+  // Only treat definitive HTTP 401s as auth failures — not transient errors or
+  // refresh failures, which might succeed on retry.
+  return "status" in err && (err as { status: number }).status === 401;
+}
+
 export default function TimelinePage() {
   const [posts, setPosts] = useState<PostData[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [fetching, setFetching] = useState(false);
   const [fetchStatus, setFetchStatus] = useState("");
+  const [fetchError, setFetchError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
   const agentRef = useRef<import("@atproto/api").Agent | null>(null);
   const pendingScrollRestore = useRef<number | null>(null);
@@ -254,6 +262,8 @@ export default function TimelinePage() {
           const agent = new Agent(result.session);
           agentRef.current = agent;
           setBlueskyAgent(agent);
+        } else {
+          setFetchError("Your Bluesky session has expired. Please log out and log back in to reconnect.");
         }
       } catch {
         // No Bluesky session — that's okay, we'll still show Mastodon posts
@@ -319,6 +329,9 @@ export default function TimelinePage() {
     sessionStorage.removeItem("timeline_scroll");
     setFetching(true);
     setFetchStatus("Fetching posts...");
+    setFetchError(null);
+
+    const errors: string[] = [];
 
     try {
       const promises: Promise<unknown>[] = [];
@@ -327,28 +340,51 @@ export default function TimelinePage() {
       if (agent?.did) {
         promises.push(
           (async () => {
-            setFetchStatus("Fetching Bluesky timeline...");
-            const response = await agent.getTimeline({ limit: 50 });
-            const blueskyPosts = response.data.feed.map((item) =>
-              mapBlueskyPost(item as unknown as { post: Record<string, unknown>; reason?: unknown })
-            );
-            await fetch("/api/posts/fetch", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ platform: "bluesky", posts: blueskyPosts }),
-            });
+            try {
+              setFetchStatus("Fetching Bluesky timeline...");
+              const response = await agent.getTimeline({ limit: 50 });
+              const blueskyPosts = response.data.feed.map((item) =>
+                mapBlueskyPost(item as unknown as { post: Record<string, unknown>; reason?: unknown })
+              );
+              await fetch("/api/posts/fetch", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ platform: "bluesky", posts: blueskyPosts }),
+              });
+            } catch (err) {
+              console.error("Bluesky fetch error:", err instanceof Error ? err.message : err);
+              if (err && typeof err === "object") console.error("Bluesky fetch error details:", JSON.stringify(err));
+              if (isAuthError(err)) {
+                setBlueskyAgent(null);
+                agentRef.current = null;
+                errors.push("Your Bluesky session has expired. Please reload the page to reconnect.");
+              } else {
+                errors.push("Bluesky fetch failed — check your connection.");
+              }
+            }
           })()
         );
       }
 
       promises.push(
         (async () => {
-          setFetchStatus("Fetching Mastodon timeline...");
-          await fetch("/api/posts/fetch", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ platform: "mastodon" }),
-          });
+          try {
+            setFetchStatus("Fetching Mastodon timeline...");
+            const res = await fetch("/api/posts/fetch", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ platform: "mastodon" }),
+            });
+            if (!res.ok) {
+              const data = await res.json().catch(() => ({}));
+              console.error("Mastodon fetch error:", data.error);
+              if (res.status === 401) {
+                errors.push("Your Mastodon session has expired. Please reconnect your account.");
+              }
+            }
+          } catch (err) {
+            console.error("Mastodon fetch error:", err);
+          }
         })()
       );
 
@@ -357,6 +393,7 @@ export default function TimelinePage() {
       console.error("Feed fetch error:", err);
     }
 
+    if (errors.length > 0) setFetchError(errors.join(" "));
     setFetching(false);
     setFetchStatus("");
 
@@ -456,6 +493,13 @@ export default function TimelinePage() {
           {fetching ? fetchStatus || "Refreshing..." : "Refresh"}
         </button>
       </div>
+
+      {fetchError && (
+        <p className="text-muted" style={{ textAlign: "center", padding: "8px 0", color: "var(--color-error, #c0392b)" }}>
+          {fetchError}{" "}
+          {fetchError.includes("expired") && <button onClick={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.href = "/login"; }} style={{ background: "none", border: "none", padding: 0, color: "inherit", textDecoration: "underline", cursor: "pointer" }}>Log out</button>}
+        </p>
+      )}
 
       {loading && (
         <div className="spinner-container">
