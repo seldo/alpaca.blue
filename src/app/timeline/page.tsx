@@ -6,6 +6,7 @@ import {
   getBlueskyAgent,
   setBlueskyAgent,
 } from "@/lib/bluesky-oauth";
+import { usePullToRefresh } from "@/lib/usePullToRefresh";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
 
@@ -409,6 +410,8 @@ export default function TimelinePage() {
     }
   }, [fetchTimeline]);
 
+  const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refreshFeed, fetching);
+
   // Save timeline state to sessionStorage whenever posts or cursor change
   useEffect(() => {
     if (posts.length > 0) {
@@ -483,6 +486,12 @@ export default function TimelinePage() {
 
   return (
     <AppLayout>
+
+      {(pullDistance > 0 || pullRefreshing) && (
+        <div className="pull-indicator" style={{ height: pullRefreshing ? 48 : pullDistance * 0.5 }}>
+          <div className="spinner" style={{ opacity: pullRefreshing ? 1 : pullDistance > 0 ? 0.4 + 0.6 * (pullDistance / 72) : 0 }} />
+        </div>
+      )}
 
       <div className="timeline-actions">
         <button

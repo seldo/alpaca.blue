@@ -645,6 +645,19 @@ body {
   color: var(--color-error);
 }
 
+/* Pull-to-refresh indicator */
+.pull-indicator {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: hidden;
+  transition: height 0.1s ease;
+}
+
+.pull-indicator .spinner {
+  transition: opacity 0.15s ease;
+}
+
 /* Spinner */
 .spinner-container {
   display: flex;
