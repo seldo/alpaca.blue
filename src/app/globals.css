@@ -951,11 +951,6 @@ body {
 }
 
 /* Timeline */
-.timeline-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-bottom: 16px;
-}
 
 .timeline-feed {
   display: flex;

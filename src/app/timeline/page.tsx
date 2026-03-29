@@ -410,7 +410,7 @@ export default function TimelinePage() {
     }
   }, [fetchTimeline]);
 
-  const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refreshFeed, fetching);
+  const { pullDistance, refreshing: pullRefreshing, dragging } = usePullToRefresh(refreshFeed, fetching);
 
   // Save timeline state to sessionStorage whenever posts or cursor change
   useEffect(() => {
@@ -493,15 +493,9 @@ export default function TimelinePage() {
         </div>
       )}
 
-      <div className="timeline-actions">
-        <button
-          onClick={refreshFeed}
-          disabled={fetching}
-          className="btn btn-outline"
-        >
-          {fetching ? fetchStatus || "Refreshing..." : "Refresh"}
-        </button>
-      </div>
+      {fetching && fetchStatus && (
+        <p className="text-muted" style={{ textAlign: "center", padding: "4px 0", fontSize: "0.85em" }}>{fetchStatus}</p>
+      )}
 
       {fetchError && (
         <p className="text-muted" style={{ textAlign: "center", padding: "8px 0", color: "var(--color-error, #c0392b)" }}>
@@ -518,12 +512,12 @@ export default function TimelinePage() {
 
       {!loading && posts.length === 0 && (
         <p className="text-muted" style={{ textAlign: "center", padding: "40px 0" }}>
-          No posts yet. Make sure you&apos;ve connected and imported your accounts, then hit Refresh.
+          No posts yet. Make sure you&apos;ve connected and imported your accounts, then pull down to refresh.
         </p>
       )}
 
       {!loading && (
-        <div className="timeline-feed">
+        <div className="timeline-feed" style={dragging ? { cursor: "grabbing", userSelect: "none" } : undefined}>
           {posts.map((post) => (
             <PostCard key={`${post.platform}-${post.id}`} post={post} blueskyAgent={agentRef.current} />
           ))}

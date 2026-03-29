@@ -272,7 +272,7 @@ export default function MentionsPage() {
     }
   }, [fetchMentions]);
 
-  const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refreshFeed, fetching);
+  const { pullDistance, refreshing: pullRefreshing, dragging } = usePullToRefresh(refreshFeed, fetching);
 
   // Cache mentions state
   useEffect(() => {
@@ -354,15 +354,9 @@ export default function MentionsPage() {
         </div>
       )}
 
-      <div className="timeline-actions">
-        <button
-          onClick={refreshFeed}
-          disabled={fetching}
-          className="btn btn-outline"
-        >
-          {fetching ? fetchStatus || "Refreshing..." : "Refresh"}
-        </button>
-      </div>
+      {fetching && fetchStatus && (
+        <p className="text-muted" style={{ textAlign: "center", padding: "4px 0", fontSize: "0.85em" }}>{fetchStatus}</p>
+      )}
 
       {fetchError && (
         <p className="text-muted" style={{ textAlign: "center", padding: "8px 0", color: "var(--color-error, #c0392b)" }}>
@@ -379,12 +373,12 @@ export default function MentionsPage() {
 
       {!loading && posts.length === 0 && (
         <p className="text-muted" style={{ textAlign: "center", padding: "40px 0" }}>
-          No mentions yet. Hit Refresh to check for new mentions.
+          No mentions yet. Pull down to refresh.
         </p>
       )}
 
       {!loading && (
-        <div className="timeline-feed">
+        <div className="timeline-feed" style={dragging ? { cursor: "grabbing", userSelect: "none" } : undefined}>
           {posts.map((post) => (
             <PostCard key={`${post.platform}-${post.id}`} post={post} blueskyAgent={agentRef.current} />
           ))}
