@@ -1,94 +1,116 @@
 import { useEffect, useRef, useState } from "react";
 
-const THRESHOLD = 72;
+const THRESHOLD = 80;
 const MAX_PULL = 96;
+
+// Normalize wheel deltaY to approximate pixels regardless of deltaMode
+function wheelPixels(e: WheelEvent): number {
+  if (e.deltaMode === 0) return Math.abs(e.deltaY);       // already pixels
+  if (e.deltaMode === 1) return Math.abs(e.deltaY) * 16;  // lines → px
+  return Math.abs(e.deltaY) * 400;                        // pages → px
+}
 
 export function usePullToRefresh(onRefresh: () => Promise<void>, disabled = false) {
   const [pullDistance, setPullDistance] = useState(0);
   const [refreshing, setRefreshing] = useState(false);
-  const [dragging, setDragging] = useState(false);
-  const startYRef = useRef(0);
-  const activeRef = useRef(false);
-  const pullDistanceRef = useRef(0);
+
+  // Touch state
+  const touchStartY = useRef(0);
+  const touchActive = useRef(false);
+  const touchDistance = useRef(0);
+
+  // Wheel state
+  const wheelAccumulated = useRef(0);
+  const wheelResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
-    // ── shared release logic ──────────────────────────────────
-    const release = async () => {
-      if (!activeRef.current) return;
-      activeRef.current = false;
-      setDragging(false);
-      const distance = pullDistanceRef.current;
+    // ── shared trigger ────────────────────────────────────────
+    const trigger = async () => {
+      setRefreshing(true);
       setPullDistance(0);
-      pullDistanceRef.current = 0;
-      if (distance >= THRESHOLD) {
-        setRefreshing(true);
-        try {
-          await onRefresh();
-        } finally {
-          setRefreshing(false);
-        }
+      try {
+        await onRefresh();
+      } finally {
+        setRefreshing(false);
       }
-    };
-
-    const updatePull = (clientY: number) => {
-      const delta = clientY - startYRef.current;
-      if (delta <= 0 || window.scrollY > 0) {
-        activeRef.current = false;
-        setDragging(false);
-        setPullDistance(0);
-        pullDistanceRef.current = 0;
-        return;
-      }
-      const capped = Math.min(delta, MAX_PULL);
-      pullDistanceRef.current = capped;
-      setPullDistance(capped);
     };
 
     // ── touch ─────────────────────────────────────────────────
     const onTouchStart = (e: TouchEvent) => {
       if (disabled || refreshing || window.scrollY > 0) return;
-      startYRef.current = e.touches[0].clientY;
-      activeRef.current = true;
+      touchStartY.current = e.touches[0].clientY;
+      touchActive.current = true;
     };
 
     const onTouchMove = (e: TouchEvent) => {
-      if (!activeRef.current) return;
-      updatePull(e.touches[0].clientY);
+      if (!touchActive.current) return;
+      const delta = e.touches[0].clientY - touchStartY.current;
+      if (delta <= 0 || window.scrollY > 0) {
+        touchActive.current = false;
+        touchDistance.current = 0;
+        setPullDistance(0);
+        return;
+      }
+      const capped = Math.min(delta, MAX_PULL);
+      touchDistance.current = capped;
+      setPullDistance(capped);
     };
 
-    // ── mouse ─────────────────────────────────────────────────
-    const onMouseDown = (e: MouseEvent) => {
-      if (disabled || refreshing || window.scrollY > 0 || e.button !== 0) return;
-      startYRef.current = e.clientY;
-      activeRef.current = true;
+    const onTouchEnd = async () => {
+      if (!touchActive.current) return;
+      touchActive.current = false;
+      const d = touchDistance.current;
+      touchDistance.current = 0;
+      setPullDistance(0);
+      if (d >= THRESHOLD) await trigger();
     };
 
-    const onMouseMove = (e: MouseEvent) => {
-      if (!activeRef.current) return;
-      // Only show indicator once the user has actually started dragging down
-      const delta = e.clientY - startYRef.current;
-      if (delta > 4) setDragging(true);
-      updatePull(e.clientY);
+    // ── wheel (desktop overscroll) ────────────────────────────
+    const onWheel = (e: WheelEvent) => {
+      if (disabled || refreshing) return;
+
+      // Only care about upward scroll at the very top of the page
+      if (window.scrollY > 0 || e.deltaY >= 0) {
+        if (wheelAccumulated.current > 0) {
+          wheelAccumulated.current = 0;
+          setPullDistance(0);
+        }
+        return;
+      }
+
+      wheelAccumulated.current = Math.min(
+        wheelAccumulated.current + wheelPixels(e),
+        MAX_PULL
+      );
+      setPullDistance(wheelAccumulated.current);
+
+      // Reset indicator if the user stops scrolling
+      if (wheelResetTimer.current) clearTimeout(wheelResetTimer.current);
+      wheelResetTimer.current = setTimeout(() => {
+        wheelAccumulated.current = 0;
+        setPullDistance(0);
+      }, 400);
+
+      if (wheelAccumulated.current >= THRESHOLD) {
+        wheelAccumulated.current = 0;
+        if (wheelResetTimer.current) clearTimeout(wheelResetTimer.current);
+        trigger();
+      }
     };
 
     window.addEventListener("touchstart", onTouchStart, { passive: true });
     window.addEventListener("touchmove", onTouchMove, { passive: true });
-    window.addEventListener("touchend", release);
-    window.addEventListener("mousedown", onMouseDown);
-    window.addEventListener("mousemove", onMouseMove);
-    window.addEventListener("mouseup", release);
-    window.addEventListener("mouseleave", release);
+    window.addEventListener("touchend", onTouchEnd);
+    window.addEventListener("wheel", onWheel, { passive: true });
 
     return () => {
       window.removeEventListener("touchstart", onTouchStart);
       window.removeEventListener("touchmove", onTouchMove);
-      window.removeEventListener("touchend", release);
-      window.removeEventListener("mousedown", onMouseDown);
-      window.removeEventListener("mousemove", onMouseMove);
-      window.removeEventListener("mouseup", release);
-      window.removeEventListener("mouseleave", release);
+      window.removeEventListener("touchend", onTouchEnd);
+      window.removeEventListener("wheel", onWheel);
+      if (wheelResetTimer.current) clearTimeout(wheelResetTimer.current);
     };
   }, [onRefresh, disabled, refreshing]);
 
-  return { pullDistance, refreshing, dragging };
+  return { pullDistance, refreshing };
 }

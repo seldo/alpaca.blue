@@ -410,7 +410,7 @@ export default function TimelinePage() {
     }
   }, [fetchTimeline]);
 
-  const { pullDistance, refreshing: pullRefreshing, dragging } = usePullToRefresh(refreshFeed, fetching);
+  const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refreshFeed, fetching);
 
   // Save timeline state to sessionStorage whenever posts or cursor change
   useEffect(() => {
@@ -517,7 +517,7 @@ export default function TimelinePage() {
       )}
 
       {!loading && (
-        <div className="timeline-feed" style={dragging ? { cursor: "grabbing", userSelect: "none" } : undefined}>
+        <div className="timeline-feed">
           {posts.map((post) => (
             <PostCard key={`${post.platform}-${post.id}`} post={post} blueskyAgent={agentRef.current} />
           ))}

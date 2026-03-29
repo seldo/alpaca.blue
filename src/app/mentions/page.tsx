@@ -272,7 +272,7 @@ export default function MentionsPage() {
     }
   }, [fetchMentions]);
 
-  const { pullDistance, refreshing: pullRefreshing, dragging } = usePullToRefresh(refreshFeed, fetching);
+  const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refreshFeed, fetching);
 
   // Cache mentions state
   useEffect(() => {
@@ -378,7 +378,7 @@ export default function MentionsPage() {
       )}
 
       {!loading && (
-        <div className="timeline-feed" style={dragging ? { cursor: "grabbing", userSelect: "none" } : undefined}>
+        <div className="timeline-feed">
           {posts.map((post) => (
             <PostCard key={`${post.platform}-${post.id}`} post={post} blueskyAgent={agentRef.current} />
           ))}
