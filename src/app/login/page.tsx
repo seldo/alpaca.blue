@@ -101,7 +101,19 @@ export default function LoginPage() {
     <main className="main auth-page">
       <div className="auth-container">
         <img src="/logo-horizontal.svg" alt="alpaca.blue" className="header-logo" />
-        <p className="auth-subtitle">Log in with your Bluesky account</p>
+        <p className="auth-tagline">A combined Bluesky and Mastodon client.</p>
+
+        <div className="auth-explainer">
+          <ul className="auth-feature-list">
+            <li>Unified chronological timeline from both platforms</li>
+            <li>Automatically cross-post to both platforms</li>
+            <li>Reply, repost, and like from either platform</li>
+            <li>Mentions and replies in one place</li>
+            <li>Optional cross-platform identity matching, so if other people are cross-posting you only see one post</li>
+          </ul>
+        </div>
+
+        <p className="auth-subtitle">Log in with your Bluesky account to get started</p>
 
         <form onSubmit={handleSignIn} className="form-group">
           <input
