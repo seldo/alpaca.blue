@@ -4,6 +4,7 @@ import {
   platformIdentities,
   connectedAccounts,
   persons,
+  users,
 } from "@/db/schema";
 import { eq, and, lt, desc, isNull, inArray, sql } from "drizzle-orm";
 import { createHash } from "crypto";
@@ -426,6 +427,180 @@ export async function fetchAndStoreMastodonMentions(
 
   console.log(`[mastodon] DB ops (${statuses.length} mentions, ${rows.length} rows): ${Date.now() - tDb}ms`);
   return { stored: rows.length };
+}
+
+// ── Fetch & store user's own Mastodon posts ────────────────
+
+export async function fetchAndStoreOwnMastodonPosts(
+  userId: number
+): Promise<{ stored: number; identityId: number | null }> {
+  const [account] = await db
+    .select()
+    .from(connectedAccounts)
+    .where(and(eq(connectedAccounts.userId, userId), eq(connectedAccounts.platform, "mastodon")))
+    .limit(1);
+
+  if (!account?.accessToken || !account.instanceUrl || !account.did) {
+    return { stored: 0, identityId: null };
+  }
+
+  // Find or create the user's own Mastodon platformIdentity
+  let [identity] = await db.select().from(platformIdentities).where(
+    and(
+      eq(platformIdentities.userId, userId),
+      eq(platformIdentities.platform, "mastodon"),
+      eq(platformIdentities.handle, account.handle)
+    )
+  ).limit(1);
+
+  if (!identity) {
+    const [result] = await db.insert(platformIdentities).values({
+      userId,
+      platform: "mastodon",
+      handle: account.handle,
+      did: account.did,
+      profileUrl: `${account.instanceUrl}/@${account.handle.split("@")[1]}`,
+      isFollowed: false,
+    }).onDuplicateKeyUpdate({ set: { did: account.did } });
+    identity = { id: result.insertId } as typeof identity;
+  }
+
+  const response = await fetch(
+    `${account.instanceUrl}/api/v1/accounts/${account.did}/statuses?limit=40&exclude_replies=false`,
+    { headers: { Authorization: `Bearer ${account.accessToken}` } }
+  );
+
+  if (!response.ok) return { stored: 0, identityId: identity.id };
+
+  const statuses: MastodonStatus[] = await response.json();
+
+  const rows = statuses.map((status) => {
+    const actual = status.reblog || status;
+    const plainContent = stripHtmlTags(actual.content);
+    const media = actual.media_attachments.map((m) => ({ type: m.type, url: m.url, alt: m.description || "" }));
+    return {
+      userId,
+      platformIdentityId: identity.id,
+      platform: "mastodon" as const,
+      platformPostId: actual.id,
+      postUrl: actual.url || null,
+      content: plainContent,
+      contentHtml: actual.content,
+      media: media.length > 0 ? media : null,
+      replyToId: actual.in_reply_to_id || null,
+      repostOfId: status.reblog ? status.id : null,
+      likeCount: actual.favourites_count || 0,
+      repostCount: actual.reblogs_count || 0,
+      replyCount: actual.replies_count || 0,
+      postedAt: new Date(actual.created_at),
+      dedupeHash: computeDedupeHash(plainContent),
+    };
+  });
+
+  if (rows.length > 0) {
+    await db.insert(posts).values(rows).onDuplicateKeyUpdate({
+      set: {
+        content: sql`values(${posts.content})`,
+        contentHtml: sql`values(${posts.contentHtml})`,
+        postUrl: sql`values(${posts.postUrl})`,
+        likeCount: sql`values(${posts.likeCount})`,
+        repostCount: sql`values(${posts.repostCount})`,
+        replyCount: sql`values(${posts.replyCount})`,
+        fetchedAt: new Date(),
+      },
+    });
+  }
+
+  return { stored: rows.length, identityId: identity.id };
+}
+
+// ── Get user's own platform identity IDs ──────────────────
+
+export async function getOwnIdentityIds(userId: number): Promise<number[]> {
+  const [user] = await db.select().from(users).where(eq(users.id, userId)).limit(1);
+  const accounts = await db.select().from(connectedAccounts).where(eq(connectedAccounts.userId, userId));
+
+  if (!user || accounts.length === 0) return [];
+
+  const handles = accounts.map((a) => a.handle);
+  const rows = await db.select({ id: platformIdentities.id }).from(platformIdentities).where(
+    and(
+      eq(platformIdentities.userId, userId),
+      inArray(platformIdentities.handle, handles)
+    )
+  );
+  return rows.map((r) => r.id);
+}
+
+// ── Query posts by identity IDs ────────────────────────────
+
+export async function queryPostsByIdentities(
+  identityIds: number[],
+  { cursor, limit = 50 }: { cursor?: string | null; limit?: number }
+): Promise<{ posts: ProfilePost[]; nextCursor: string | null }> {
+  if (identityIds.length === 0) return { posts: [], nextCursor: null };
+
+  const conditions = [inArray(posts.platformIdentityId, identityIds)];
+  if (cursor) conditions.push(lt(posts.postedAt, new Date(cursor)));
+
+  const identityRows = await db.select().from(platformIdentities)
+    .where(inArray(platformIdentities.id, identityIds));
+  const identityMap = new Map(identityRows.map((i) => [i.id, i]));
+
+  const rows = await db.select().from(posts)
+    .where(and(...conditions))
+    .orderBy(desc(posts.postedAt))
+    .limit(limit);
+
+  const result: ProfilePost[] = rows.map((post) => {
+    const identity = identityMap.get(post.platformIdentityId);
+    return {
+      id: post.id,
+      platform: post.platform,
+      platformPostId: post.platformPostId,
+      platformPostCid: post.platformPostCid || null,
+      postUrl: post.postUrl || null,
+      content: post.content,
+      contentHtml: post.contentHtml,
+      media: typeof post.media === "string" ? JSON.parse(post.media) : post.media,
+      replyToId: post.replyToId,
+      repostOfId: post.repostOfId,
+      quotedPost: typeof post.quotedPost === "string" ? JSON.parse(post.quotedPost) : post.quotedPost,
+      likeCount: post.likeCount,
+      repostCount: post.repostCount,
+      replyCount: post.replyCount,
+      postedAt: post.postedAt.toISOString(),
+      author: identity
+        ? { id: identity.id, handle: identity.handle, displayName: identity.displayName, avatarUrl: identity.avatarUrl, platform: identity.platform, profileUrl: identity.profileUrl }
+        : null,
+      person: null,
+      alsoPostedOn: [],
+    };
+  });
+
+  const nextCursor = result.length === limit ? result[result.length - 1].postedAt : null;
+  return { posts: result, nextCursor };
+}
+
+export interface ProfilePost {
+  id: number;
+  platform: string;
+  platformPostId: string;
+  platformPostCid: string | null;
+  postUrl: string | null;
+  content: string | null;
+  contentHtml: string | null;
+  media: unknown;
+  replyToId: string | null;
+  repostOfId: string | null;
+  quotedPost: unknown;
+  likeCount: number | null;
+  repostCount: number | null;
+  replyCount: number | null;
+  postedAt: string;
+  author: { id: number; handle: string; displayName: string | null; avatarUrl: string | null; platform: string; profileUrl: string | null } | null;
+  person: null;
+  alsoPostedOn: Array<{ platform: string; postUrl: string | null }>;
 }
 
 // ── Query timeline ─────────────────────────────────────────

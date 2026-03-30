@@ -66,6 +66,17 @@ export function AppLayout({ children, blueskyAgent }: { children: ReactNode; blu
 
           <nav className="app-sidebar-nav">
             <a
+              href="/profile"
+              className={`app-sidebar-item${pathname === "/profile" ? " app-sidebar-active" : ""}`}
+              title="Profile"
+            >
+              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+                <circle cx="12" cy="7" r="4" />
+              </svg>
+              <span className="app-sidebar-label">Profile</span>
+            </a>
+            <a
               href="/"
               className={`app-sidebar-item${pathname === "/" ? " app-sidebar-active" : ""}`}
               title="Accounts"
@@ -162,6 +173,12 @@ export function AppLayout({ children, blueskyAgent }: { children: ReactNode; blu
       )}
 
       <nav className="app-bottombar">
+        <a href="/profile" className={`app-bottombar-item${pathname === "/profile" ? " app-bottombar-active" : ""}`}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
+            <circle cx="12" cy="7" r="4" />
+          </svg>
+        </a>
         <a href="/" className={`app-bottombar-item${pathname === "/" ? " app-bottombar-active" : ""}`}>
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
