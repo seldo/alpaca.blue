@@ -1149,6 +1149,21 @@ a.post-timestamp:hover {
   text-decoration: underline;
 }
 
+.post-reply-to {
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  margin-bottom: 6px;
+}
+
+.post-reply-to-link {
+  color: var(--color-brand);
+  text-decoration: none;
+}
+
+.post-reply-to-link:hover {
+  text-decoration: underline;
+}
+
 .post-crosspost {
   font-size: 0.75rem;
   color: var(--color-text-muted);

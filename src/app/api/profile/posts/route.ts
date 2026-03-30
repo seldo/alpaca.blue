@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
 
     const identityIds = await getOwnIdentityIds(userId);
     console.log(`[profile] own identityIds: ${identityIds}`);
-    const result = await queryPostsByIdentities(identityIds, { limit });
+    const result = await queryPostsByIdentities(identityIds, { userId, limit });
     console.log(`[profile] returning ${result.posts.length} posts`);
     return NextResponse.json(result);
   } catch (err) {
@@ -69,7 +69,7 @@ export async function GET(request: NextRequest) {
     const limit = Math.min(parseInt(searchParams.get("limit") || "50"), 100);
 
     const identityIds = await getOwnIdentityIds(userId);
-    const result = await queryPostsByIdentities(identityIds, { cursor, limit });
+    const result = await queryPostsByIdentities(identityIds, { userId, cursor, limit });
     return NextResponse.json(result);
   } catch (err) {
     console.error("Profile posts error:", err);

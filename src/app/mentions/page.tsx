@@ -47,6 +47,7 @@ interface PostData {
     displayName: string | null;
   } | null;
   alsoPostedOn: Array<{ platform: string; postUrl: string | null }>;
+  replyToMe?: boolean;
 }
 
 interface BlueskyFacetFeature {
@@ -59,6 +60,61 @@ interface BlueskyFacetFeature {
 interface BlueskyFacet {
   index: { byteStart: number; byteEnd: number };
   features: BlueskyFacetFeature[];
+}
+
+interface BlueskyImage { thumb: string; alt: string; fullsize: string; }
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractBlueskyImages(embed: any): Array<{ url: string; alt: string }> {
+  if (!embed) return [];
+  const images: Array<{ url: string; alt: string }> = [];
+  if (embed.images && Array.isArray(embed.images)) {
+    for (const img of embed.images as BlueskyImage[]) {
+      images.push({ url: img.fullsize || img.thumb, alt: img.alt || "" });
+    }
+  }
+  if (embed.media?.images && Array.isArray(embed.media.images)) {
+    for (const img of embed.media.images as BlueskyImage[]) {
+      images.push({ url: img.fullsize || img.thumb, alt: img.alt || "" });
+    }
+  }
+  if (embed.playlist && embed.thumbnail) {
+    images.push({ url: embed.thumbnail, alt: "Video thumbnail" });
+  }
+  if (embed.media?.playlist && embed.media?.thumbnail) {
+    images.push({ url: embed.media.thumbnail, alt: "Video thumbnail" });
+  }
+  if (embed.external?.thumb) {
+    images.push({ url: embed.external.thumb, alt: embed.external.title || "" });
+  }
+  return images;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractQuotedPost(embed: any): {
+  uri: string; authorHandle: string; authorDisplayName?: string;
+  authorAvatar?: string; text: string;
+  media?: Array<{ type: string; url: string; alt: string }>; postedAt?: string;
+} | undefined {
+  if (!embed) return undefined;
+  const record = embed.record?.record ?? embed.record;
+  if (!record?.author || !record?.value) return undefined;
+  if (record.$type && !record.$type.includes("viewRecord")) return undefined;
+  const quoted: { uri: string; authorHandle: string; authorDisplayName?: string; authorAvatar?: string; text: string; media?: Array<{ type: string; url: string; alt: string }>; postedAt?: string; } = {
+    uri: record.uri,
+    authorHandle: record.author.handle,
+    authorDisplayName: record.author.displayName || undefined,
+    authorAvatar: record.author.avatar || undefined,
+    text: (record.value as { text?: string })?.text || "",
+    postedAt: record.indexedAt || (record.value as { createdAt?: string })?.createdAt,
+  };
+  if (record.embeds && Array.isArray(record.embeds) && record.embeds.length > 0) {
+    const embeddedImages = extractBlueskyImages(record.embeds[0]);
+    if (embeddedImages.length > 0) {
+      quoted.media = embeddedImages.map((img) => ({ type: "image", url: img.url, alt: img.alt }));
+    }
+  }
+  return quoted;
 }
 
 function facetsToHtml(text: string, facets?: BlueskyFacet[]): string {
@@ -180,18 +236,37 @@ export default function MentionsPage() {
         uri: string; cid: string; authorDid: string; authorHandle: string;
         text: string; contentHtml: string; createdAt: string;
         replyToUri?: string; postType: string;
+        images?: Array<{ url: string; alt: string }>;
+        quotedPost?: ReturnType<typeof extractQuotedPost>;
       }[] = [];
       const agent = agentRef.current;
       if (agent?.did) {
         try {
           setFetchStatus("Fetching Bluesky mentions...");
           const response = await agent.listNotifications({ limit: 50 });
-          blueskyPosts = response.data.notifications
-            .filter((n: { reason: string }) => n.reason === "mention" || n.reason === "reply")
-            .map((n: { author: { did: string; handle: string }; record: unknown; uri: string; cid: string; indexedAt: string }) => {
+          const mentionNotifs = response.data.notifications
+            .filter((n: { reason: string }) => n.reason === "mention" || n.reason === "reply");
+
+          // Batch-fetch hydrated post views to get embed/image data
+          const uris = mentionNotifs.map((n: { uri: string }) => n.uri);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const embedMap = new Map<string, any>();
+          if (uris.length > 0) {
+            try {
+              const postsRes = await agent.getPosts({ uris });
+              for (const p of postsRes.data.posts) {
+                embedMap.set(p.uri, (p as unknown as { embed?: unknown }).embed);
+              }
+            } catch (err) {
+              console.warn("Failed to batch-fetch post embeds:", err);
+            }
+          }
+
+          blueskyPosts = mentionNotifs.map((n: { author: { did: string; handle: string }; record: unknown; uri: string; cid: string; indexedAt: string }) => {
               const record = n.record as { text?: string; facets?: BlueskyFacet[]; reply?: { parent?: { uri?: string } } };
               const text = record?.text || "";
               const contentHtml = facetsToHtml(text, record?.facets);
+              const embed = embedMap.get(n.uri);
               return {
                 uri: n.uri,
                 cid: n.cid,
@@ -202,6 +277,8 @@ export default function MentionsPage() {
                 createdAt: n.indexedAt,
                 replyToUri: record?.reply?.parent?.uri || undefined,
                 postType: "mention",
+                images: extractBlueskyImages(embed),
+                quotedPost: extractQuotedPost(embed),
               };
             });
         } catch (err) {

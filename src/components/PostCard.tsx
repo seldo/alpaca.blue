@@ -109,6 +109,8 @@ interface PostData {
     displayName: string | null;
   } | null;
   alsoPostedOn?: Array<{ platform: string; postUrl: string | null }>;
+  replyToAuthor?: { handle: string; dbPostId: number; postUrl: string | null } | null;
+  replyToMe?: boolean;
 }
 
 interface BlueskyAgentLike {
@@ -491,6 +493,27 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
           <span className="post-timestamp">{relativeTime(post.postedAt)}</span>
         )}
       </div>
+
+      {post.replyToMe && (
+        <div className="post-reply-to">Replied to you</div>
+      )}
+
+      {post.replyToAuthor && (
+        <div className="post-reply-to">
+          In reply to{" "}
+          {post.replyToAuthor.dbPostId > 0 ? (
+            <a href={`/posts/${post.replyToAuthor.dbPostId}`} className="post-reply-to-link">
+              @{post.replyToAuthor.handle}
+            </a>
+          ) : post.replyToAuthor.postUrl ? (
+            <a href={post.replyToAuthor.postUrl} target="_blank" rel="noopener noreferrer" className="post-reply-to-link">
+              @{post.replyToAuthor.handle}
+            </a>
+          ) : (
+            <span>@{post.replyToAuthor.handle}</span>
+          )}
+        </div>
+      )}
 
       {post.alsoPostedOn && post.alsoPostedOn.length > 0 && (
         <div className="post-crosspost">

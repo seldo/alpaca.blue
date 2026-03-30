@@ -182,6 +182,7 @@ export async function storeBlueskyPosts(
         content: sql`values(${posts.content})`,
         contentHtml: sql`values(${posts.contentHtml})`,
         platformPostCid: sql`values(${posts.platformPostCid})`,
+        media: sql`values(${posts.media})`,
         quotedPost: sql`values(${posts.quotedPost})`,
         likeCount: sql`values(${posts.likeCount})`,
         repostCount: sql`values(${posts.repostCount})`,
@@ -410,13 +411,14 @@ export async function fetchAndStoreMastodonMentions(
     });
   }
 
-  // Single batch upsert
+  // Single batch upsert — include replyToId so it gets corrected if it was null on first insert
   if (rows.length > 0) {
     await db.insert(posts).values(rows).onDuplicateKeyUpdate({
       set: {
         content: sql`values(${posts.content})`,
         contentHtml: sql`values(${posts.contentHtml})`,
         postUrl: sql`values(${posts.postUrl})`,
+        replyToId: sql`values(${posts.replyToId})`,
         likeCount: sql`values(${posts.likeCount})`,
         repostCount: sql`values(${posts.repostCount})`,
         replyCount: sql`values(${posts.replyCount})`,
@@ -536,7 +538,7 @@ export async function getOwnIdentityIds(userId: number): Promise<number[]> {
 
 export async function queryPostsByIdentities(
   identityIds: number[],
-  { cursor, limit = 50 }: { cursor?: string | null; limit?: number }
+  { userId, cursor, limit = 50 }: { userId: number; cursor?: string | null; limit?: number }
 ): Promise<{ posts: ProfilePost[]; nextCursor: string | null }> {
   if (identityIds.length === 0) return { posts: [], nextCursor: null };
 
@@ -552,8 +554,48 @@ export async function queryPostsByIdentities(
     .orderBy(desc(posts.postedAt))
     .limit(limit);
 
+  // Batch-resolve parent post authors for replies
+  const replyToIds = [...new Set(rows.map((p) => p.replyToId).filter(Boolean) as string[])];
+  const replyToAuthorMap = new Map<string, { handle: string; dbPostId: number; postUrl: string | null }>();
+
+  if (replyToIds.length > 0) {
+    // Look up parent posts we have stored
+    const parentRows = await db
+      .select({ id: posts.id, platformPostId: posts.platformPostId, postUrl: posts.postUrl, handle: platformIdentities.handle })
+      .from(posts)
+      .leftJoin(platformIdentities, eq(posts.platformIdentityId, platformIdentities.id))
+      .where(and(eq(posts.userId, userId), inArray(posts.platformPostId, replyToIds)));
+    for (const r of parentRows) {
+      replyToAuthorMap.set(r.platformPostId, { handle: r.handle ?? "", dbPostId: r.id, postUrl: r.postUrl ?? null });
+    }
+
+    // For Bluesky URIs not found: extract DID and look up in platformIdentities
+    const unresolvedBsky = replyToIds.filter((id) => id.startsWith("at://") && !replyToAuthorMap.has(id));
+    if (unresolvedBsky.length > 0) {
+      const dids = [...new Set(unresolvedBsky.map((uri) => uri.split("/")[2]).filter(Boolean))];
+      const didRows = await db
+        .select({ did: platformIdentities.did, handle: platformIdentities.handle })
+        .from(platformIdentities)
+        .where(and(eq(platformIdentities.userId, userId), inArray(platformIdentities.did, dids)));
+      const didToHandle = new Map(didRows.map((r) => [r.did!, r.handle]));
+      for (const uri of unresolvedBsky) {
+        const did = uri.split("/")[2];
+        const rkey = uri.split("/").pop();
+        const handle = didToHandle.get(did);
+        if (handle) {
+          replyToAuthorMap.set(uri, {
+            handle,
+            dbPostId: 0,
+            postUrl: rkey ? `https://bsky.app/profile/${handle}/post/${rkey}` : null,
+          });
+        }
+      }
+    }
+  }
+
   const result: ProfilePost[] = rows.map((post) => {
     const identity = identityMap.get(post.platformIdentityId);
+    const replyToAuthor = post.replyToId ? (replyToAuthorMap.get(post.replyToId) ?? null) : null;
     return {
       id: post.id,
       platform: post.platform,
@@ -575,6 +617,7 @@ export async function queryPostsByIdentities(
         : null,
       person: null,
       alsoPostedOn: [],
+      replyToAuthor,
     };
   });
 
@@ -601,6 +644,7 @@ export interface ProfilePost {
   author: { id: number; handle: string; displayName: string | null; avatarUrl: string | null; platform: string; profileUrl: string | null } | null;
   person: null;
   alsoPostedOn: Array<{ platform: string; postUrl: string | null }>;
+  replyToAuthor: { handle: string; dbPostId: number; postUrl: string | null } | null;
 }
 
 // ── Query timeline ─────────────────────────────────────────
@@ -624,6 +668,7 @@ export interface TimelinePost {
   author: { id: number; handle: string; displayName: string | null; avatarUrl: string | null; platform: string; profileUrl: string | null } | null;
   person: { id: number; displayName: string | null } | null;
   alsoPostedOn: Array<{ platform: string; postUrl: string | null }>;
+  replyToMe?: boolean;
 }
 
 export async function queryTimeline(
@@ -689,6 +734,7 @@ export async function queryTimeline(
         : null,
       person: row.person ? { id: row.person.id, displayName: row.person.displayName } : null,
       alsoPostedOn: [],
+      replyToMe: type === "mentions" && !!row.post.replyToId,
     };
 
     if (hash) seen.set(hash, result.length);

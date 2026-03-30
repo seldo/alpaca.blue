@@ -39,10 +39,65 @@ interface PostData {
   author: { id: number; handle: string; displayName: string | null; avatarUrl: string | null; platform: string; profileUrl: string | null } | null;
   person: { id: number; displayName: string | null } | null;
   alsoPostedOn: Array<{ platform: string; postUrl: string | null }>;
+  replyToAuthor: { handle: string; dbPostId: number; postUrl: string | null } | null;
 }
 
 interface BlueskyFacetFeature { $type: string; uri?: string; did?: string; tag?: string; }
 interface BlueskyFacet { index: { byteStart: number; byteEnd: number }; features: BlueskyFacetFeature[]; }
+interface BlueskyImage { thumb: string; alt: string; fullsize: string; }
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractBlueskyImages(embed: any): Array<{ url: string; alt: string }> {
+  if (!embed) return [];
+  const images: Array<{ url: string; alt: string }> = [];
+  if (embed.images && Array.isArray(embed.images)) {
+    for (const img of embed.images as BlueskyImage[]) {
+      images.push({ url: img.fullsize || img.thumb, alt: img.alt || "" });
+    }
+  }
+  if (embed.media?.images && Array.isArray(embed.media.images)) {
+    for (const img of embed.media.images as BlueskyImage[]) {
+      images.push({ url: img.fullsize || img.thumb, alt: img.alt || "" });
+    }
+  }
+  if (embed.playlist && embed.thumbnail) {
+    images.push({ url: embed.thumbnail, alt: "Video thumbnail" });
+  }
+  if (embed.media?.playlist && embed.media?.thumbnail) {
+    images.push({ url: embed.media.thumbnail, alt: "Video thumbnail" });
+  }
+  if (embed.external?.thumb) {
+    images.push({ url: embed.external.thumb, alt: embed.external.title || "" });
+  }
+  return images;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractQuotedPost(embed: any): {
+  uri: string; authorHandle: string; authorDisplayName?: string;
+  authorAvatar?: string; text: string;
+  media?: Array<{ type: string; url: string; alt: string }>; postedAt?: string;
+} | undefined {
+  if (!embed) return undefined;
+  const record = embed.record?.record ?? embed.record;
+  if (!record?.author || !record?.value) return undefined;
+  if (record.$type && !record.$type.includes("viewRecord")) return undefined;
+  const quoted: { uri: string; authorHandle: string; authorDisplayName?: string; authorAvatar?: string; text: string; media?: Array<{ type: string; url: string; alt: string }>; postedAt?: string; } = {
+    uri: record.uri,
+    authorHandle: record.author.handle,
+    authorDisplayName: record.author.displayName || undefined,
+    authorAvatar: record.author.avatar || undefined,
+    text: (record.value as { text?: string })?.text || "",
+    postedAt: record.indexedAt || (record.value as { createdAt?: string })?.createdAt,
+  };
+  if (record.embeds && Array.isArray(record.embeds) && record.embeds.length > 0) {
+    const embeddedImages = extractBlueskyImages(record.embeds[0]);
+    if (embeddedImages.length > 0) {
+      quoted.media = embeddedImages.map((img) => ({ type: "image", url: img.url, alt: img.alt }));
+    }
+  }
+  return quoted;
+}
 
 function facetsToHtml(text: string, facets?: BlueskyFacet[]): string {
   if (!facets || facets.length === 0) return linkifyUrls(escapeHtml(text));
@@ -107,6 +162,7 @@ export default function ProfilePage() {
               record: { text?: string; facets?: BlueskyFacet[]; reply?: { parent?: { uri?: string } } };
               indexedAt: string;
               likeCount?: number; repostCount?: number; replyCount?: number;
+              embed?: unknown;
             };
             const text = post.record?.text || "";
             return {
@@ -116,6 +172,8 @@ export default function ProfilePage() {
               createdAt: post.indexedAt,
               likeCount: post.likeCount, repostCount: post.repostCount, replyCount: post.replyCount,
               replyToUri: post.record?.reply?.parent?.uri || undefined,
+              images: extractBlueskyImages(post.embed),
+              quotedPost: extractQuotedPost(post.embed),
             };
           });
         } catch (err) {
