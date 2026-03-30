@@ -1574,6 +1574,16 @@ a.post-timestamp:hover {
   margin: 8px 0 0 0;
 }
 
+.settings-mobile-only {
+  display: none;
+}
+
+@media (max-width: 640px) {
+  .settings-mobile-only {
+    display: block;
+  }
+}
+
 .settings-danger-zone {
   border-color: #dc3545;
 }

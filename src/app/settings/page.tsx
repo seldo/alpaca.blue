@@ -3,6 +3,7 @@
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { AppLayout } from "@/components/AppHeader";
+import { clearBlueskySession, setBlueskyAgent } from "@/lib/bluesky-oauth";
 
 interface Account {
   id: number;
@@ -49,6 +50,16 @@ export default function SettingsPage() {
     } finally {
       setDisconnecting(null);
     }
+  }
+
+  async function handleLogout() {
+    await fetch("/api/auth/logout", { method: "POST" });
+    setBlueskyAgent(null);
+    sessionStorage.clear();
+    router.push("/login");
+    setTimeout(() => {
+      clearBlueskySession().catch(() => {});
+    }, 100);
   }
 
   async function handleResetAll() {
@@ -133,6 +144,13 @@ export default function SettingsPage() {
                   </p>
                 </div>
               )}
+            </div>
+
+            <div className="settings-group settings-mobile-only">
+              <h3 className="settings-group-title">Account</h3>
+              <button onClick={handleLogout} className="btn btn-outline">
+                Log out
+              </button>
             </div>
 
             <div className="settings-group settings-danger-zone">

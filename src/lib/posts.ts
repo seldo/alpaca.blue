@@ -85,9 +85,8 @@ function stripHtmlTags(html: string): string {
 
 export function computeDedupeHash(
   content: string,
-  postedAt: Date
 ): string | null {
-  // Normalize: lowercase, strip URLs (full and bare-domain), collapse whitespace
+  // Normalize: lowercase, strip all URLs, collapse whitespace, take first 100 chars
   const normalized = content
     .toLowerCase()
     // Full URLs
@@ -97,14 +96,12 @@ export function computeDedupeHash(
     .replace(/\b[\w-]+\.\w{2,}\/\S*/g, "")
     // Collapse whitespace
     .replace(/\s+/g, " ")
-    .trim();
+    .trim()
+    .slice(0, 100);
 
   if (normalized.length < 20) return null;
 
-  // 5-minute time window
-  const timeWindow = Math.floor(postedAt.getTime() / (5 * 60 * 1000));
-  const input = `${normalized}|${timeWindow}`;
-  return createHash("sha256").update(input).digest("hex").slice(0, 16);
+  return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
 }
 
 // ── Store Bluesky posts ────────────────────────────────────
@@ -148,7 +145,7 @@ export async function storeBlueskyPosts(
       }
 
       const postedAt = new Date(post.createdAt);
-      const dedupeHash = computeDedupeHash(post.text || "", postedAt);
+      const dedupeHash = computeDedupeHash(post.text || "");
       const media = post.images?.map((img) => ({
         type: "image",
         url: img.url,
@@ -264,7 +261,7 @@ export async function fetchAndStoreMastodonPosts(
 
       const plainContent = stripHtmlTags(actual.content);
       const postedAt = new Date(actual.created_at);
-      const dedupeHash = computeDedupeHash(plainContent, postedAt);
+      const dedupeHash = computeDedupeHash(plainContent);
       const media = actual.media_attachments.map((m) => ({
         type: m.type,
         url: m.url,
@@ -393,7 +390,7 @@ export async function fetchAndStoreMastodonMentions(
 
       const plainContent = stripHtmlTags(status.content);
       const postedAt = new Date(status.created_at);
-      const dedupeHash = computeDedupeHash(plainContent, postedAt);
+      const dedupeHash = computeDedupeHash(plainContent);
       const media = status.media_attachments.map((m) => ({
         type: m.type,
         url: m.url,
