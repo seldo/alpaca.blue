@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
     const uploadForm = new FormData();
     uploadForm.append("file", file);
 
-    const response = await fetch(`${account.instanceUrl}/api/v2/media`, {
+    const response = await fetch(`${account.instanceUrl}/api/v1/media`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${account.accessToken}`,
@@ -45,7 +45,7 @@ export async function POST(request: NextRequest) {
       body: uploadForm,
     });
 
-    if (!response.ok) {
+    if (!response.ok || response.status === 202) {
       const text = await response.text();
       console.error("Mastodon media upload failed:", response.status, text);
       return NextResponse.json(
