@@ -224,6 +224,15 @@ export default function SettingsPage() {
             </button>
           </div>
 
+          <div className="settings-group">
+            <h3 className="settings-group-title">About</h3>
+            <p className="settings-account-note">
+              alpaca.blue is open source.{" "}
+              <a href="https://github.com/seldo/alpaca.blue" target="_blank" rel="noopener noreferrer">View the source on GitHub</a>
+              {" "}— contributions and bug reports welcome.
+            </p>
+          </div>
+
           <div className="settings-group settings-danger-zone">
             <h3 className="settings-group-title">Danger Zone</h3>
             <p className="settings-account-note">
