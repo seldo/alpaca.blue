@@ -3,9 +3,8 @@
 import { useState, useEffect, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
-  getBlueskyOAuthClient,
   getBlueskyAgent,
-  setBlueskyAgent,
+  restoreBlueskySession,
 } from "@/lib/bluesky-oauth";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
@@ -53,34 +52,19 @@ export default function PostPage() {
   const params = useParams();
   const router = useRouter();
   const [post, setPost] = useState<PostData | null>(null);
+  const [ancestors, setAncestors] = useState<PostData[]>([]);
+  const [replies, setReplies] = useState<PostData[]>([]);
   const [loading, setLoading] = useState(true);
+  const [threadLoading, setThreadLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const agentRef = useRef<import("@atproto/api").Agent | null>(null);
 
   useEffect(() => {
-    const existing = getBlueskyAgent();
-    if (existing) {
-      agentRef.current = existing;
-      return;
-    }
-    (async () => {
-      try {
-        const client = await getBlueskyOAuthClient();
-        const result = await client.init();
-        if (result?.session) {
-          const { Agent } = await import("@atproto/api");
-          const agent = new Agent(result.session);
-          agentRef.current = agent;
-          setBlueskyAgent(agent);
-        }
-      } catch {
-        // No Bluesky session
-      }
-    })();
-  }, []);
+    async function init() {
+      let agent = getBlueskyAgent();
+      if (!agent) agent = await restoreBlueskySession();
+      if (agent) agentRef.current = agent;
 
-  useEffect(() => {
-    async function fetchPost() {
       try {
         const res = await fetch(`/api/posts/${params.id}`);
         if (!res.ok) {
@@ -93,8 +77,23 @@ export default function PostPage() {
       } finally {
         setLoading(false);
       }
+
+      // Fetch thread context in the background
+      setThreadLoading(true);
+      try {
+        const threadRes = await fetch(`/api/posts/${params.id}/thread`);
+        if (threadRes.ok) {
+          const { ancestors: ancs, replies: reps } = await threadRes.json();
+          setAncestors(ancs || []);
+          setReplies(reps || []);
+        }
+      } catch {
+        // Thread context is non-critical; fail silently
+      } finally {
+        setThreadLoading(false);
+      }
     }
-    fetchPost();
+    init();
   }, [params.id]);
 
   return (
@@ -120,8 +119,39 @@ export default function PostPage() {
       )}
 
       {post && (
-        <div className="timeline-feed">
-          <PostCard post={post} blueskyAgent={agentRef.current} />
+        <div className="thread-view">
+          {ancestors.map((ancestor) => (
+            <div key={`${ancestor.platform}-${ancestor.platformPostId}`} className="thread-ancestor-node">
+              <PostCard post={ancestor} blueskyAgent={agentRef.current} />
+            </div>
+          ))}
+
+          <div className="thread-focal-node">
+            <PostCard post={post} blueskyAgent={agentRef.current} />
+          </div>
+
+          {(threadLoading && replies.length === 0) && (
+            <div className="thread-loading">
+              <div className="spinner spinner-sm" />
+            </div>
+          )}
+
+          {replies.length > 0 && (
+            <>
+              <div className="thread-replies-label">Replies</div>
+              {replies.map((reply) => (
+                <PostCard
+                  key={`${reply.platform}-${reply.platformPostId}`}
+                  post={reply}
+                  blueskyAgent={agentRef.current}
+                />
+              ))}
+            </>
+          )}
+
+          {!threadLoading && replies.length === 0 && ancestors.length === 0 && (
+            <p className="thread-empty">No replies yet.</p>
+          )}
         </div>
       )}
     </AppLayout>

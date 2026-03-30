@@ -997,6 +997,66 @@ body {
   flex-direction: column;
 }
 
+/* Thread view */
+.thread-view {
+  display: flex;
+  flex-direction: column;
+}
+
+.thread-ancestor-node {
+  position: relative;
+}
+
+.thread-ancestor-node .post-card {
+  border-bottom: none;
+  padding-bottom: 8px;
+}
+
+/* Vertical connector line from ancestor avatar down to next post */
+.thread-ancestor-node::after {
+  content: '';
+  position: absolute;
+  left: 23px; /* avatar center (48px / 2 - 1px) */
+  bottom: 0;
+  width: 2px;
+  height: 12px;
+  background: var(--color-border);
+}
+
+.thread-focal-node .post-card {
+  border-bottom: none;
+}
+
+.thread-replies-label {
+  font-size: 0.75rem;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-text-muted);
+  padding: 16px 0 8px;
+  border-bottom: 1px solid var(--color-border);
+  margin-bottom: 4px;
+}
+
+.thread-loading {
+  display: flex;
+  justify-content: center;
+  padding: 20px 0;
+}
+
+.spinner-sm {
+  width: 20px;
+  height: 20px;
+  border-width: 2px;
+}
+
+.thread-empty {
+  color: var(--color-text-muted);
+  text-align: center;
+  padding: 24px 0;
+  font-size: 0.9rem;
+}
+
 /* Post cards */
 .post-card {
   padding: 20px 0;

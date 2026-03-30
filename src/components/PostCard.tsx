@@ -441,7 +441,11 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
       target.closest("textarea") ||
       target.closest("form")
     ) return;
-    router.push(`/posts/${post.id}`);
+    if (post.id > 0) {
+      router.push(`/posts/${post.id}`);
+    } else if (post.postUrl) {
+      window.open(post.postUrl, "_blank", "noopener,noreferrer");
+    }
   }
 
   return (
