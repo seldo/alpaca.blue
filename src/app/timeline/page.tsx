@@ -247,6 +247,7 @@ export default function TimelinePage() {
   const [composeOpen, setComposeOpen] = useState(false);
   const agentRef = useRef<import("@atproto/api").Agent | null>(null);
   const pendingScrollRestore = useRef<number | null>(null);
+  const isFetchingRef = useRef(false);
 
   // Initialize Bluesky agent
   useEffect(() => {
@@ -318,91 +319,69 @@ export default function TimelinePage() {
     };
   }
 
-  // Fetch posts from both platforms, then load the timeline
+  // Fetch posts from both platforms and load the timeline in one request
   const refreshFeed = useCallback(async () => {
+    if (isFetchingRef.current) {
+      console.log("[timeline] refreshFeed called while already fetching, skipping");
+      return;
+    }
+    isFetchingRef.current = true;
     sessionStorage.removeItem("timeline_cache");
     sessionStorage.removeItem("timeline_scroll");
     setFetching(true);
     setFetchStatus("Fetching posts...");
     setFetchError(null);
 
-    const errors: string[] = [];
-
     try {
-      const promises: Promise<unknown>[] = [];
+      // Fetch Bluesky client-side (needs DPoP agent), then send both to server in one call
+      let blueskyPosts: ReturnType<typeof mapBlueskyPost>[] = [];
       const agent = agentRef.current;
-
       if (agent?.did) {
-        promises.push(
-          (async () => {
-            try {
-              setFetchStatus("Fetching Bluesky timeline...");
-              const response = await agent.getTimeline({ limit: 50 });
-              const blueskyPosts = response.data.feed.map((item) =>
-                mapBlueskyPost(item as unknown as { post: Record<string, unknown>; reason?: unknown })
-              );
-              await fetch("/api/posts/fetch", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ platform: "bluesky", posts: blueskyPosts }),
-              });
-            } catch (err) {
-              console.error("Bluesky fetch error:", err instanceof Error ? err.message : err);
-              if (err && typeof err === "object") console.error("Bluesky fetch error details:", JSON.stringify(err));
-              if (isAuthError(err)) {
-                setBlueskyAgent(null);
-                agentRef.current = null;
-                errors.push("Your Bluesky session has expired. Please reload the page to reconnect.");
-              } else {
-                errors.push("Bluesky fetch failed — check your connection.");
-              }
-            }
-          })()
-        );
+        try {
+          setFetchStatus("Fetching Bluesky timeline...");
+          const response = await agent.getTimeline({ limit: 50 });
+          blueskyPosts = response.data.feed.map((item) =>
+            mapBlueskyPost(item as unknown as { post: Record<string, unknown>; reason?: unknown })
+          );
+        } catch (err) {
+          console.error("Bluesky fetch error:", err instanceof Error ? err.message : err);
+          if (isAuthError(err)) {
+            setBlueskyAgent(null);
+            agentRef.current = null;
+            setFetchError("Your Bluesky session has expired. Please reload the page to reconnect.");
+          } else {
+            setFetchError("Bluesky fetch failed — check your connection.");
+          }
+        }
       }
 
-      promises.push(
-        (async () => {
-          try {
-            setFetchStatus("Fetching Mastodon timeline...");
-            const res = await fetch("/api/posts/fetch", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ platform: "mastodon" }),
-            });
-            if (!res.ok) {
-              const data = await res.json().catch(() => ({}));
-              console.error("Mastodon fetch error:", data.error);
-              if (res.status === 401) {
-                errors.push("Your Mastodon session has expired. Please reconnect your account.");
-              }
-            }
-          } catch (err) {
-            console.error("Mastodon fetch error:", err);
-          }
-        })()
-      );
+      setFetchStatus("Fetching Mastodon timeline...");
+      const res = await fetch("/api/posts/fetch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platform: "all", posts: blueskyPosts }),
+      });
 
-      await Promise.allSettled(promises);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        console.error("Feed fetch error:", data.error);
+        if (res.status === 401) {
+          setFetchError("Your Mastodon session has expired. Please reconnect your account.");
+        }
+      } else {
+        const data = await res.json();
+        setPosts(data.posts);
+        setNextCursor(data.nextCursor);
+      }
     } catch (err) {
       console.error("Feed fetch error:", err);
-    }
-
-    if (errors.length > 0) setFetchError(errors.join(" "));
-    setFetching(false);
-    setFetchStatus("");
-
-    setLoading(true);
-    try {
-      const data = await fetchTimeline();
-      setPosts(data.posts);
-      setNextCursor(data.nextCursor);
-    } catch (err) {
-      console.error("Timeline load error:", err);
     } finally {
+      setFetching(false);
+      setFetchStatus("");
       setLoading(false);
+      isFetchingRef.current = false;
     }
-  }, [fetchTimeline]);
+  }, []);
 
   const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refreshFeed, fetching);
 

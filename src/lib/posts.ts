@@ -3,8 +3,9 @@ import {
   posts,
   platformIdentities,
   connectedAccounts,
+  persons,
 } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, lt, desc, isNull } from "drizzle-orm";
 import { createHash } from "crypto";
 
 // ── Types ──────────────────────────────────────────────────
@@ -221,12 +222,14 @@ export async function fetchAndStoreMastodonPosts(
   const instanceHost = new URL(instanceUrl).hostname;
 
   // Fetch home timeline
+  const t0 = Date.now();
   const response = await fetch(
     `${instanceUrl}/api/v1/timelines/home?limit=40`,
     {
       headers: { Authorization: `Bearer ${account.accessToken}` },
     }
   );
+  console.log(`[mastodon] timeline API fetch: ${Date.now() - t0}ms`);
 
   if (!response.ok) {
     throw new Error(`Mastodon timeline fetch failed: ${response.status}`);
@@ -234,6 +237,7 @@ export async function fetchAndStoreMastodonPosts(
 
   const statuses: MastodonStatus[] = await response.json();
   let stored = 0;
+  const tDb = Date.now();
 
   for (const status of statuses) {
     try {
@@ -304,6 +308,7 @@ export async function fetchAndStoreMastodonPosts(
       console.error(`Failed to store Mastodon status ${status.id}:`, err);
     }
   }
+  console.log(`[mastodon] DB upsert loop (${statuses.length} statuses): ${Date.now() - tDb}ms, stored=${stored}`);
 
   return { stored };
 }
@@ -338,12 +343,14 @@ export async function fetchAndStoreMastodonMentions(
   const instanceUrl = account.instanceUrl;
   const instanceHost = new URL(instanceUrl).hostname;
 
+  const t0 = Date.now();
   const response = await fetch(
     `${instanceUrl}/api/v1/notifications?types[]=mention&limit=40`,
     {
       headers: { Authorization: `Bearer ${account.accessToken}` },
     }
   );
+  console.log(`[mastodon] mentions API fetch: ${Date.now() - t0}ms`);
 
   if (!response.ok) {
     throw new Error(`Mastodon mentions fetch failed: ${response.status}`);
@@ -351,6 +358,7 @@ export async function fetchAndStoreMastodonMentions(
 
   const notifications: MastodonNotification[] = await response.json();
   let stored = 0;
+  const tDb = Date.now();
 
   for (const notification of notifications) {
     if (!notification.status) continue;
@@ -433,6 +441,104 @@ export async function fetchAndStoreMastodonMentions(
       console.error(`Failed to store Mastodon mention ${notification.id}:`, err);
     }
   }
+  console.log(`[mastodon] DB upsert loop (${notifications.length} notifications): ${Date.now() - tDb}ms, stored=${stored}`);
 
   return { stored };
+}
+
+// ── Query timeline ─────────────────────────────────────────
+
+export interface TimelinePost {
+  id: number;
+  platform: string;
+  platformPostId: string;
+  platformPostCid: string | null;
+  postUrl: string | null;
+  content: string | null;
+  contentHtml: string | null;
+  media: unknown;
+  replyToId: string | null;
+  repostOfId: string | null;
+  quotedPost: unknown;
+  likeCount: number | null;
+  repostCount: number | null;
+  replyCount: number | null;
+  postedAt: string;
+  author: { id: number; handle: string; displayName: string | null; avatarUrl: string | null; platform: string; profileUrl: string | null } | null;
+  person: { id: number; displayName: string | null } | null;
+  alsoPostedOn: Array<{ platform: string; postUrl: string | null }>;
+}
+
+export async function queryTimeline(
+  userId: number,
+  { type, cursor, limit = 50 }: { type?: string | null; cursor?: string | null; limit?: number }
+): Promise<{ posts: TimelinePost[]; nextCursor: string | null }> {
+  const fetchLimit = Math.ceil(limit * 1.5);
+
+  const conditions = [eq(posts.userId, userId)];
+  if (type === "mentions") {
+    conditions.push(eq(posts.postType, "mention"));
+  } else {
+    conditions.push(eq(posts.postType, "timeline"));
+    conditions.push(isNull(posts.replyToId));
+  }
+  if (cursor) {
+    conditions.push(lt(posts.postedAt, new Date(cursor)));
+  }
+
+  const rows = await db
+    .select({ post: posts, identity: platformIdentities, person: persons })
+    .from(posts)
+    .leftJoin(platformIdentities, eq(posts.platformIdentityId, platformIdentities.id))
+    .leftJoin(persons, eq(platformIdentities.personId, persons.id))
+    .where(and(...conditions))
+    .orderBy(desc(posts.postedAt))
+    .limit(fetchLimit);
+
+  const seen = new Map<string, number>();
+  const result: TimelinePost[] = [];
+
+  for (const row of rows) {
+    const hash = row.post.dedupeHash;
+    if (hash && seen.has(hash)) {
+      const existingIdx = seen.get(hash)!;
+      const alreadyListed = result[existingIdx].alsoPostedOn.some(
+        (p) => p.platform === row.post.platform
+      );
+      if (!alreadyListed) {
+        result[existingIdx].alsoPostedOn.push({ platform: row.post.platform, postUrl: row.post.postUrl || null });
+      }
+      continue;
+    }
+
+    const entry: TimelinePost = {
+      id: row.post.id,
+      platform: row.post.platform,
+      platformPostId: row.post.platformPostId,
+      platformPostCid: row.post.platformPostCid || null,
+      postUrl: row.post.postUrl || null,
+      content: row.post.content,
+      contentHtml: row.post.contentHtml,
+      media: typeof row.post.media === "string" ? JSON.parse(row.post.media) : row.post.media,
+      replyToId: row.post.replyToId,
+      repostOfId: row.post.repostOfId,
+      quotedPost: typeof row.post.quotedPost === "string" ? JSON.parse(row.post.quotedPost) : row.post.quotedPost,
+      likeCount: row.post.likeCount,
+      repostCount: row.post.repostCount,
+      replyCount: row.post.replyCount,
+      postedAt: row.post.postedAt.toISOString(),
+      author: row.identity
+        ? { id: row.identity.id, handle: row.identity.handle, displayName: row.identity.displayName, avatarUrl: row.identity.avatarUrl, platform: row.identity.platform, profileUrl: row.identity.profileUrl }
+        : null,
+      person: row.person ? { id: row.person.id, displayName: row.person.displayName } : null,
+      alsoPostedOn: [],
+    };
+
+    if (hash) seen.set(hash, result.length);
+    result.push(entry);
+  }
+
+  const trimmed = result.slice(0, limit);
+  const nextCursor = trimmed.length === limit ? trimmed[trimmed.length - 1].postedAt : null;
+  return { posts: trimmed, nextCursor };
 }

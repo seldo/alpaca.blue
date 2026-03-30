@@ -3,6 +3,7 @@ import {
   storeBlueskyPosts,
   fetchAndStoreMastodonPosts,
   fetchAndStoreMastodonMentions,
+  queryTimeline,
 } from "@/lib/posts";
 import { requireSession, unauthorizedResponse } from "@/lib/session";
 
@@ -14,6 +15,24 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json();
     const { platform, type } = body;
+
+    if (platform === "all") {
+      // Combined: store bluesky posts + fetch mastodon in parallel, then return timeline
+      const { posts: blueskyPosts } = body;
+      const limit = Math.min(parseInt(body.limit || "50"), 100);
+
+      await Promise.allSettled([
+        blueskyPosts?.length > 0
+          ? storeBlueskyPosts(blueskyPosts, userId)
+          : Promise.resolve(),
+        type === "mentions"
+          ? fetchAndStoreMastodonMentions(userId)
+          : fetchAndStoreMastodonPosts(userId),
+      ]);
+
+      const result = await queryTimeline(userId, { type, limit });
+      return NextResponse.json(result);
+    }
 
     if (platform === "bluesky") {
       const { posts } = body;

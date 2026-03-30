@@ -128,6 +128,7 @@ export default function MentionsPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const agentRef = useRef<import("@atproto/api").Agent | null>(null);
   const pendingScrollRestore = useRef<number | null>(null);
+  const isFetchingRef = useRef(false);
 
   // Initialize Bluesky agent
   useEffect(() => {
@@ -162,107 +163,86 @@ export default function MentionsPage() {
   );
 
   const refreshFeed = useCallback(async () => {
+    if (isFetchingRef.current) {
+      console.log("[mentions] refreshFeed called while already fetching, skipping");
+      return;
+    }
+    isFetchingRef.current = true;
     sessionStorage.removeItem("mentions_cache");
     sessionStorage.removeItem("mentions_scroll");
     setFetching(true);
     setFetchStatus("Fetching mentions...");
     setFetchError(null);
 
-    const errors: string[] = [];
-
     try {
-      const promises: Promise<unknown>[] = [];
+      // Fetch Bluesky mentions client-side, then send both to server in one call
+      let blueskyPosts: {
+        uri: string; cid: string; authorDid: string; authorHandle: string;
+        text: string; contentHtml: string; createdAt: string;
+        replyToUri?: string; postType: string;
+      }[] = [];
       const agent = agentRef.current;
-      // Bluesky mentions via notifications
       if (agent?.did) {
-        promises.push(
-          (async () => {
-            try {
-              setFetchStatus("Fetching Bluesky mentions...");
-              const response = await agent.listNotifications({ limit: 50 });
-              const mentionPosts = response.data.notifications
-                .filter((n: { reason: string }) => n.reason === "mention" || n.reason === "reply")
-                .map((n: { author: { did: string; handle: string }; record: unknown; uri: string; cid: string; indexedAt: string }) => {
-                  const record = n.record as { text?: string; facets?: BlueskyFacet[]; reply?: { parent?: { uri?: string } } };
-                  const text = record?.text || "";
-                  const contentHtml = facetsToHtml(text, record?.facets);
-                  return {
-                    uri: n.uri,
-                    cid: n.cid,
-                    authorDid: n.author.did,
-                    authorHandle: n.author.handle,
-                    text,
-                    contentHtml,
-                    createdAt: n.indexedAt,
-                    replyToUri: record?.reply?.parent?.uri || undefined,
-                    postType: "mention",
-                  };
-                });
-              if (mentionPosts.length > 0) {
-                await fetch("/api/posts/fetch", {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                  body: JSON.stringify({ platform: "bluesky", posts: mentionPosts }),
-                });
-              }
-            } catch (err) {
-              console.error("Bluesky mentions fetch error:", err instanceof Error ? err.message : err);
-              if (err && typeof err === "object") console.error("Bluesky fetch error details:", JSON.stringify(err));
-              if (isAuthError(err)) {
-                setBlueskyAgent(null);
-                agentRef.current = null;
-                errors.push("Your Bluesky session has expired. Please reload the page to reconnect.");
-              } else {
-                errors.push("Bluesky fetch failed — check your connection.");
-              }
-            }
-          })()
-        );
+        try {
+          setFetchStatus("Fetching Bluesky mentions...");
+          const response = await agent.listNotifications({ limit: 50 });
+          blueskyPosts = response.data.notifications
+            .filter((n: { reason: string }) => n.reason === "mention" || n.reason === "reply")
+            .map((n: { author: { did: string; handle: string }; record: unknown; uri: string; cid: string; indexedAt: string }) => {
+              const record = n.record as { text?: string; facets?: BlueskyFacet[]; reply?: { parent?: { uri?: string } } };
+              const text = record?.text || "";
+              const contentHtml = facetsToHtml(text, record?.facets);
+              return {
+                uri: n.uri,
+                cid: n.cid,
+                authorDid: n.author.did,
+                authorHandle: n.author.handle,
+                text,
+                contentHtml,
+                createdAt: n.indexedAt,
+                replyToUri: record?.reply?.parent?.uri || undefined,
+                postType: "mention",
+              };
+            });
+        } catch (err) {
+          console.error("Bluesky mentions fetch error:", err instanceof Error ? err.message : err);
+          if (isAuthError(err)) {
+            setBlueskyAgent(null);
+            agentRef.current = null;
+            setFetchError("Your Bluesky session has expired. Please reload the page to reconnect.");
+          } else {
+            setFetchError("Bluesky fetch failed — check your connection.");
+          }
+        }
       }
 
-      // Mastodon mentions
-      promises.push(
-        (async () => {
-          try {
-            setFetchStatus("Fetching Mastodon mentions...");
-            const res = await fetch("/api/posts/fetch", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ platform: "mastodon", type: "mentions" }),
-            });
-            if (!res.ok) {
-              const data = await res.json().catch(() => ({}));
-              console.error("Mastodon mentions fetch error:", data.error);
-              if (res.status === 401) {
-                errors.push("Your Mastodon session has expired. Please reconnect your account.");
-              }
-            }
-          } catch (err) {
-            console.error("Mastodon mentions fetch error:", err);
-          }
-        })()
-      );
+      setFetchStatus("Fetching Mastodon mentions...");
+      const res = await fetch("/api/posts/fetch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ platform: "all", type: "mentions", posts: blueskyPosts }),
+      });
 
-      await Promise.allSettled(promises);
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        console.error("Mentions fetch error:", data.error);
+        if (res.status === 401) {
+          setFetchError("Your Mastodon session has expired. Please reconnect your account.");
+        }
+      } else {
+        const data = await res.json();
+        setPosts(data.posts);
+        setNextCursor(data.nextCursor);
+      }
     } catch (err) {
       console.error("Mentions fetch error:", err);
-    }
-
-    if (errors.length > 0) setFetchError(errors.join(" "));
-    setFetching(false);
-    setFetchStatus("");
-
-    setLoading(true);
-    try {
-      const data = await fetchMentions();
-      setPosts(data.posts);
-      setNextCursor(data.nextCursor);
-    } catch (err) {
-      console.error("Mentions load error:", err);
     } finally {
+      setFetching(false);
+      setFetchStatus("");
       setLoading(false);
+      isFetchingRef.current = false;
     }
-  }, [fetchMentions]);
+  }, []);
 
   const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refreshFeed, fetching);
 
