@@ -10,13 +10,6 @@ export async function POST(request: NextRequest) {
     if (!session) return unauthorizedResponse();
     const userId = session.userId!;
 
-    const body = await request.json();
-    const content = (body.content || "").trim();
-    const mediaIds: string[] = Array.isArray(body.mediaIds) ? body.mediaIds : [];
-    if (!content && mediaIds.length === 0) {
-      return NextResponse.json({ error: "Post cannot be empty" }, { status: 400 });
-    }
-
     const [account] = await db
       .select()
       .from(connectedAccounts)
@@ -35,28 +28,36 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const response = await fetch(`${account.instanceUrl}/api/v1/statuses`, {
+    const formData = await request.formData();
+    const file = formData.get("file") as File | null;
+    if (!file) {
+      return NextResponse.json({ error: "No file provided" }, { status: 400 });
+    }
+
+    const uploadForm = new FormData();
+    uploadForm.append("file", file);
+
+    const response = await fetch(`${account.instanceUrl}/api/v2/media`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${account.accessToken}`,
-        "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        status: content,
-        ...(mediaIds.length > 0 ? { media_ids: mediaIds } : {}),
-      }),
+      body: uploadForm,
     });
 
     if (!response.ok) {
       const text = await response.text();
-      console.error("Mastodon post failed:", response.status, text);
-      return NextResponse.json({ error: "Failed to post to Mastodon" }, { status: 502 });
+      console.error("Mastodon media upload failed:", response.status, text);
+      return NextResponse.json(
+        { error: "Failed to upload media to Mastodon" },
+        { status: 502 }
+      );
     }
 
-    const status = await response.json();
-    return NextResponse.json({ id: status.id, url: status.url });
+    const media = await response.json();
+    return NextResponse.json({ id: media.id });
   } catch (err) {
-    console.error("Create post error:", err);
-    return NextResponse.json({ error: "Failed to create post" }, { status: 500 });
+    console.error("Media upload error:", err);
+    return NextResponse.json({ error: "Failed to upload media" }, { status: 500 });
   }
 }
