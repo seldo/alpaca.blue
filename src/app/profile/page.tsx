@@ -158,7 +158,7 @@ export default function ProfilePage() {
           blueskyPosts = response.data.feed.map((item) => {
             const post = item.post as {
               uri: string; cid: string;
-              author: { did: string; handle: string };
+              author: { did: string; handle: string; displayName?: string; avatar?: string };
               record: { text?: string; facets?: BlueskyFacet[]; reply?: { parent?: { uri?: string } } };
               indexedAt: string;
               likeCount?: number; repostCount?: number; replyCount?: number;
@@ -168,6 +168,8 @@ export default function ProfilePage() {
             return {
               uri: post.uri, cid: post.cid,
               authorDid: post.author.did, authorHandle: post.author.handle,
+              authorDisplayName: post.author.displayName || undefined,
+              authorAvatar: post.author.avatar || undefined,
               text, contentHtml: facetsToHtml(text, post.record?.facets),
               createdAt: post.indexedAt,
               likeCount: post.likeCount, repostCount: post.repostCount, replyCount: post.replyCount,

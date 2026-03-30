@@ -307,6 +307,8 @@ export default function TimelinePage() {
       cid: post.cid,
       authorDid: post.author.did,
       authorHandle: post.author.handle,
+      authorDisplayName: post.author.displayName || undefined,
+      authorAvatar: post.author.avatar || undefined,
       text,
       contentHtml,
       createdAt: post.indexedAt,

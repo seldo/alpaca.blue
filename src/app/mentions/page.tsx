@@ -247,15 +247,20 @@ export default function MentionsPage() {
           const mentionNotifs = response.data.notifications
             .filter((n: { reason: string }) => n.reason === "mention" || n.reason === "reply");
 
-          // Batch-fetch hydrated post views to get embed/image data
+          // Batch-fetch hydrated post views to get embed/image/author data
           const uris = mentionNotifs.map((n: { uri: string }) => n.uri);
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          const embedMap = new Map<string, any>();
+          const hydratedMap = new Map<string, { embed?: unknown; authorDisplayName?: string; authorAvatar?: string }>();
           if (uris.length > 0) {
             try {
               const postsRes = await agent.getPosts({ uris });
               for (const p of postsRes.data.posts) {
-                embedMap.set(p.uri, (p as unknown as { embed?: unknown }).embed);
+                const hp = p as unknown as { embed?: unknown; author: { displayName?: string; avatar?: string } };
+                hydratedMap.set(p.uri, {
+                  embed: hp.embed,
+                  authorDisplayName: hp.author.displayName || undefined,
+                  authorAvatar: hp.author.avatar || undefined,
+                });
               }
             } catch (err) {
               console.warn("Failed to batch-fetch post embeds:", err);
@@ -266,19 +271,21 @@ export default function MentionsPage() {
               const record = n.record as { text?: string; facets?: BlueskyFacet[]; reply?: { parent?: { uri?: string } } };
               const text = record?.text || "";
               const contentHtml = facetsToHtml(text, record?.facets);
-              const embed = embedMap.get(n.uri);
+              const hydrated = hydratedMap.get(n.uri);
               return {
                 uri: n.uri,
                 cid: n.cid,
                 authorDid: n.author.did,
                 authorHandle: n.author.handle,
+                authorDisplayName: hydrated?.authorDisplayName,
+                authorAvatar: hydrated?.authorAvatar,
                 text,
                 contentHtml,
                 createdAt: n.indexedAt,
                 replyToUri: record?.reply?.parent?.uri || undefined,
                 postType: "mention",
-                images: extractBlueskyImages(embed),
-                quotedPost: extractQuotedPost(embed),
+                images: extractBlueskyImages(hydrated?.embed),
+                quotedPost: extractQuotedPost(hydrated?.embed),
               };
             });
         } catch (err) {

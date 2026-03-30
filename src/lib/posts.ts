@@ -26,6 +26,8 @@ export interface BlueskyPostData {
   cid?: string;
   authorDid: string;
   authorHandle: string;
+  authorDisplayName?: string;
+  authorAvatar?: string;
   text: string;
   contentHtml?: string;
   createdAt: string;
@@ -131,7 +133,8 @@ export async function storeBlueskyPosts(
 
   const identityMap = new Map(identityRows.map((i) => [i.did!, i]));
 
-  // Insert missing identities only for mentions (rare — people who @-ed us but aren't followed)
+  // Upsert all identities to keep avatar/displayName fresh; insert new ones for mentions
+  // We need insertIds for new rows, so we do individual upserts for missing mentions
   const missingMentions = postsData.filter(
     (p) => p.postType === "mention" && !identityMap.has(p.authorDid)
   );
@@ -141,11 +144,20 @@ export async function storeBlueskyPosts(
       platform: "bluesky",
       handle: post.authorHandle,
       did: post.authorDid,
+      displayName: post.authorDisplayName || null,
+      avatarUrl: post.authorAvatar || null,
       profileUrl: `https://bsky.app/profile/${post.authorHandle}`,
       isFollowed: false,
-    }).onDuplicateKeyUpdate({ set: { handle: post.authorHandle } });
+    }).onDuplicateKeyUpdate({
+      set: {
+        handle: post.authorHandle,
+        displayName: post.authorDisplayName || null,
+        avatarUrl: post.authorAvatar || null,
+      },
+    });
     identityMap.set(post.authorDid, { id: result.insertId } as typeof identityRows[0]);
   }
+
 
   // Build all post rows in memory
   const rows = [];
