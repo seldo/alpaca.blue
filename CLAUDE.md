@@ -1,5 +1,8 @@
 # alpaca.blue
 
+## IMPORTANT: Git Rules
+**NEVER commit or push without explicit instruction from the user.** Always wait to be asked before running any git commit or git push commands.
+
 Unified social reader that merges Bluesky and Mastodon into a single chronological timeline with cross-platform identity resolution. Multi-user, with Bluesky OAuth login.
 
 ## Tech Stack
