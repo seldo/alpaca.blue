@@ -375,6 +375,10 @@ body {
   }
 }
 
+.app-fab {
+  display: none;
+}
+
 /* Sections */
 .section {
   margin-bottom: 40px;
