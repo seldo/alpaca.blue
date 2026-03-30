@@ -5,7 +5,7 @@ import {
   connectedAccounts,
   persons,
 } from "@/db/schema";
-import { eq, and, lt, desc, isNull } from "drizzle-orm";
+import { eq, and, lt, desc, isNull, inArray, sql } from "drizzle-orm";
 import { createHash } from "crypto";
 
 // ── Types ──────────────────────────────────────────────────
@@ -111,107 +111,98 @@ export async function storeBlueskyPosts(
   postsData: BlueskyPostData[],
   userId: number
 ): Promise<{ stored: number }> {
-  let stored = 0;
+  if (postsData.length === 0) return { stored: 0 };
 
-  for (const post of postsData) {
-    try {
-      // Look up the platform identity for this author, create if missing (for mentions)
-      let [identity] = await db
-        .select()
-        .from(platformIdentities)
-        .where(
-          and(
-            eq(platformIdentities.userId, userId),
-            eq(platformIdentities.platform, "bluesky"),
-            eq(platformIdentities.did, post.authorDid)
-          )
-        )
-        .limit(1);
+  const t0 = Date.now();
 
-      if (!identity) {
-        if (post.postType === "mention") {
-          // Create identity on the fly for mention authors we don't follow
-          const [result] = await db.insert(platformIdentities).values({
-            userId,
-            platform: "bluesky",
-            handle: post.authorHandle,
-            did: post.authorDid,
-            profileUrl: `https://bsky.app/profile/${post.authorHandle}`,
-            isFollowed: false,
-          });
-          identity = { id: result.insertId } as typeof identity;
-        } else {
-          continue; // Skip timeline posts from unknown authors
-        }
-      }
+  // Fetch all known identities in one query by DID
+  const allDids = [...new Set(postsData.map((p) => p.authorDid))];
+  const identityRows = await db
+    .select()
+    .from(platformIdentities)
+    .where(
+      and(
+        eq(platformIdentities.userId, userId),
+        eq(platformIdentities.platform, "bluesky"),
+        inArray(platformIdentities.did, allDids)
+      )
+    );
 
-      const postedAt = new Date(post.createdAt);
-      const dedupeHash = computeDedupeHash(post.text || "");
-      const media = post.images?.map((img) => ({
-        type: "image",
-        url: img.url,
-        alt: img.alt,
-      }));
+  const identityMap = new Map(identityRows.map((i) => [i.did!, i]));
 
-      await db
-        .insert(posts)
-        .values({
-          userId,
-          postType: post.postType || "timeline",
-          platformIdentityId: identity.id,
-          platform: "bluesky",
-          platformPostId: post.uri,
-          platformPostCid: post.cid || null,
-          content: post.text || "",
-          contentHtml: post.contentHtml || null,
-          media: media && media.length > 0 ? media : null,
-          replyToId: post.replyToUri || null,
-          repostOfId: post.repostOfUri || null,
-          quotedPost: post.quotedPost || null,
-          likeCount: post.likeCount || 0,
-          repostCount: post.repostCount || 0,
-          replyCount: post.replyCount || 0,
-          postedAt,
-          dedupeHash,
-        })
-        .onDuplicateKeyUpdate({
-          set: {
-            content: post.text || "",
-            contentHtml: post.contentHtml || null,
-            platformPostCid: post.cid || null,
-            quotedPost: post.quotedPost || null,
-            likeCount: post.likeCount || 0,
-            repostCount: post.repostCount || 0,
-            replyCount: post.replyCount || 0,
-            fetchedAt: new Date(),
-          },
-        });
-
-      stored++;
-    } catch (err) {
-      console.error(`Failed to store Bluesky post ${post.uri}:`, err);
-    }
+  // Insert missing identities only for mentions (rare — people who @-ed us but aren't followed)
+  const missingMentions = postsData.filter(
+    (p) => p.postType === "mention" && !identityMap.has(p.authorDid)
+  );
+  for (const post of missingMentions) {
+    const [result] = await db.insert(platformIdentities).values({
+      userId,
+      platform: "bluesky",
+      handle: post.authorHandle,
+      did: post.authorDid,
+      profileUrl: `https://bsky.app/profile/${post.authorHandle}`,
+      isFollowed: false,
+    }).onDuplicateKeyUpdate({ set: { handle: post.authorHandle } });
+    identityMap.set(post.authorDid, { id: result.insertId } as typeof identityRows[0]);
   }
 
-  return { stored };
+  // Build all post rows in memory
+  const rows = [];
+  for (const post of postsData) {
+    const identity = identityMap.get(post.authorDid);
+    if (!identity) continue; // Skip timeline posts from unknown authors
+
+    const media = post.images?.map((img) => ({ type: "image", url: img.url, alt: img.alt }));
+    rows.push({
+      userId,
+      postType: (post.postType || "timeline") as "timeline" | "mention",
+      platformIdentityId: identity.id,
+      platform: "bluesky" as const,
+      platformPostId: post.uri,
+      platformPostCid: post.cid || null,
+      content: post.text || "",
+      contentHtml: post.contentHtml || null,
+      media: media && media.length > 0 ? media : null,
+      replyToId: post.replyToUri || null,
+      repostOfId: post.repostOfUri || null,
+      quotedPost: post.quotedPost || null,
+      likeCount: post.likeCount || 0,
+      repostCount: post.repostCount || 0,
+      replyCount: post.replyCount || 0,
+      postedAt: new Date(post.createdAt),
+      dedupeHash: computeDedupeHash(post.text || ""),
+    });
+  }
+
+  // Single batch upsert
+  if (rows.length > 0) {
+    await db.insert(posts).values(rows).onDuplicateKeyUpdate({
+      set: {
+        content: sql`values(${posts.content})`,
+        contentHtml: sql`values(${posts.contentHtml})`,
+        platformPostCid: sql`values(${posts.platformPostCid})`,
+        quotedPost: sql`values(${posts.quotedPost})`,
+        likeCount: sql`values(${posts.likeCount})`,
+        repostCount: sql`values(${posts.repostCount})`,
+        replyCount: sql`values(${posts.replyCount})`,
+        fetchedAt: new Date(),
+      },
+    });
+  }
+
+  console.log(`[bluesky] DB ops (${postsData.length} posts, ${rows.length} rows): ${Date.now() - t0}ms`);
+  return { stored: rows.length };
 }
 
 // ── Fetch & store Mastodon posts ───────────────────────────
 
 export async function fetchAndStoreMastodonPosts(
   userId: number
-): Promise<{
-  stored: number;
-}> {
+): Promise<{ stored: number }> {
   const [account] = await db
     .select()
     .from(connectedAccounts)
-    .where(
-      and(
-        eq(connectedAccounts.userId, userId),
-        eq(connectedAccounts.platform, "mastodon")
-      )
-    )
+    .where(and(eq(connectedAccounts.userId, userId), eq(connectedAccounts.platform, "mastodon")))
     .limit(1);
 
   if (!account?.accessToken || !account.instanceUrl) {
@@ -221,14 +212,10 @@ export async function fetchAndStoreMastodonPosts(
   const instanceUrl = account.instanceUrl;
   const instanceHost = new URL(instanceUrl).hostname;
 
-  // Fetch home timeline
   const t0 = Date.now();
-  const response = await fetch(
-    `${instanceUrl}/api/v1/timelines/home?limit=40`,
-    {
-      headers: { Authorization: `Bearer ${account.accessToken}` },
-    }
-  );
+  const response = await fetch(`${instanceUrl}/api/v1/timelines/home?limit=40`, {
+    headers: { Authorization: `Bearer ${account.accessToken}` },
+  });
   console.log(`[mastodon] timeline API fetch: ${Date.now() - t0}ms`);
 
   if (!response.ok) {
@@ -236,81 +223,79 @@ export async function fetchAndStoreMastodonPosts(
   }
 
   const statuses: MastodonStatus[] = await response.json();
-  let stored = 0;
   const tDb = Date.now();
 
-  for (const status of statuses) {
-    try {
-      // Use the original status for reblogs
-      const actual = status.reblog || status;
-      const acct = actual.account.acct;
-      const handle = acct.includes("@")
-        ? `@${acct}`
-        : `@${acct}@${instanceHost}`;
+  // Collect all handles, then fetch all identities in one query
+  const handleOf = (acct: string) =>
+    acct.includes("@") ? `@${acct}` : `@${acct}@${instanceHost}`;
 
-      // Look up the platform identity
-      const [identity] = await db
-        .select()
-        .from(platformIdentities)
-        .where(
-          and(
-            eq(platformIdentities.userId, userId),
-            eq(platformIdentities.platform, "mastodon"),
-            eq(platformIdentities.handle, handle)
-          )
+  const allHandles = [...new Set(
+    statuses.map((s) => handleOf((s.reblog || s).account.acct))
+  )];
+
+  const identityRows = allHandles.length > 0
+    ? await db.select().from(platformIdentities).where(
+        and(
+          eq(platformIdentities.userId, userId),
+          eq(platformIdentities.platform, "mastodon"),
+          inArray(platformIdentities.handle, allHandles)
         )
-        .limit(1);
+      )
+    : [];
 
-      if (!identity) continue;
+  const identityMap = new Map(identityRows.map((i) => [i.handle, i]));
 
-      const plainContent = stripHtmlTags(actual.content);
-      const postedAt = new Date(actual.created_at);
-      const dedupeHash = computeDedupeHash(plainContent);
-      const media = actual.media_attachments.map((m) => ({
-        type: m.type,
-        url: m.url,
-        alt: m.description || "",
-      }));
+  // Build all post rows in memory
+  const rows = [];
+  for (const status of statuses) {
+    const actual = status.reblog || status;
+    const handle = handleOf(actual.account.acct);
+    const identity = identityMap.get(handle);
+    if (!identity) continue;
 
-      await db
-        .insert(posts)
-        .values({
-          userId,
-          platformIdentityId: identity.id,
-          platform: "mastodon",
-          platformPostId: actual.id,
-          postUrl: actual.url || null,
-          content: plainContent,
-          contentHtml: actual.content,
-          media: media.length > 0 ? media : null,
-          replyToId: actual.in_reply_to_id || null,
-          repostOfId: status.reblog ? status.id : null,
-          likeCount: actual.favourites_count || 0,
-          repostCount: actual.reblogs_count || 0,
-          replyCount: actual.replies_count || 0,
-          postedAt,
-          dedupeHash,
-        })
-        .onDuplicateKeyUpdate({
-          set: {
-            content: plainContent,
-            contentHtml: actual.content,
-            postUrl: actual.url || null,
-            likeCount: actual.favourites_count || 0,
-            repostCount: actual.reblogs_count || 0,
-            replyCount: actual.replies_count || 0,
-            fetchedAt: new Date(),
-          },
-        });
+    const plainContent = stripHtmlTags(actual.content);
+    const media = actual.media_attachments.map((m) => ({
+      type: m.type,
+      url: m.url,
+      alt: m.description || "",
+    }));
 
-      stored++;
-    } catch (err) {
-      console.error(`Failed to store Mastodon status ${status.id}:`, err);
-    }
+    rows.push({
+      userId,
+      platformIdentityId: identity.id,
+      platform: "mastodon" as const,
+      platformPostId: actual.id,
+      postUrl: actual.url || null,
+      content: plainContent,
+      contentHtml: actual.content,
+      media: media.length > 0 ? media : null,
+      replyToId: actual.in_reply_to_id || null,
+      repostOfId: status.reblog ? status.id : null,
+      likeCount: actual.favourites_count || 0,
+      repostCount: actual.reblogs_count || 0,
+      replyCount: actual.replies_count || 0,
+      postedAt: new Date(actual.created_at),
+      dedupeHash: computeDedupeHash(plainContent),
+    });
   }
-  console.log(`[mastodon] DB upsert loop (${statuses.length} statuses): ${Date.now() - tDb}ms, stored=${stored}`);
 
-  return { stored };
+  // Single batch upsert
+  if (rows.length > 0) {
+    await db.insert(posts).values(rows).onDuplicateKeyUpdate({
+      set: {
+        content: sql`values(${posts.content})`,
+        contentHtml: sql`values(${posts.contentHtml})`,
+        postUrl: sql`values(${posts.postUrl})`,
+        likeCount: sql`values(${posts.likeCount})`,
+        repostCount: sql`values(${posts.repostCount})`,
+        replyCount: sql`values(${posts.replyCount})`,
+        fetchedAt: new Date(),
+      },
+    });
+  }
+
+  console.log(`[mastodon] DB ops (${statuses.length} statuses, ${rows.length} rows): ${Date.now() - tDb}ms`);
+  return { stored: rows.length };
 }
 
 // ── Fetch & store Mastodon mentions ──────────────────────
@@ -328,12 +313,7 @@ export async function fetchAndStoreMastodonMentions(
   const [account] = await db
     .select()
     .from(connectedAccounts)
-    .where(
-      and(
-        eq(connectedAccounts.userId, userId),
-        eq(connectedAccounts.platform, "mastodon")
-      )
-    )
+    .where(and(eq(connectedAccounts.userId, userId), eq(connectedAccounts.platform, "mastodon")))
     .limit(1);
 
   if (!account?.accessToken || !account.instanceUrl) {
@@ -346,9 +326,7 @@ export async function fetchAndStoreMastodonMentions(
   const t0 = Date.now();
   const response = await fetch(
     `${instanceUrl}/api/v1/notifications?types[]=mention&limit=40`,
-    {
-      headers: { Authorization: `Bearer ${account.accessToken}` },
-    }
+    { headers: { Authorization: `Bearer ${account.accessToken}` } }
   );
   console.log(`[mastodon] mentions API fetch: ${Date.now() - t0}ms`);
 
@@ -357,93 +335,97 @@ export async function fetchAndStoreMastodonMentions(
   }
 
   const notifications: MastodonNotification[] = await response.json();
-  let stored = 0;
+  const statuses = notifications.map((n) => n.status).filter(Boolean) as MastodonStatus[];
   const tDb = Date.now();
 
-  for (const notification of notifications) {
-    if (!notification.status) continue;
-    const status = notification.status;
+  const handleOf = (acct: string) =>
+    acct.includes("@") ? `@${acct}` : `@${acct}@${instanceHost}`;
 
-    try {
-      const acct = status.account.acct;
-      const handle = acct.includes("@")
-        ? `@${acct}`
-        : `@${acct}@${instanceHost}`;
-
-      let [identity] = await db
-        .select()
-        .from(platformIdentities)
-        .where(
-          and(
-            eq(platformIdentities.userId, userId),
-            eq(platformIdentities.platform, "mastodon"),
-            eq(platformIdentities.handle, handle)
-          )
+  // Fetch all known identities in one query
+  const allHandles = [...new Set(statuses.map((s) => handleOf(s.account.acct)))];
+  const identityRows = allHandles.length > 0
+    ? await db.select().from(platformIdentities).where(
+        and(
+          eq(platformIdentities.userId, userId),
+          eq(platformIdentities.platform, "mastodon"),
+          inArray(platformIdentities.handle, allHandles)
         )
-        .limit(1);
+      )
+    : [];
 
-      if (!identity) {
-        const [result] = await db.insert(platformIdentities).values({
-          userId,
-          platform: "mastodon",
-          handle,
-          did: status.account.id,
-          displayName: status.account.display_name || null,
-          avatarUrl: status.account.avatar || null,
-          profileUrl: status.account.url,
-          isFollowed: false,
-        });
-        identity = { id: result.insertId } as typeof identity;
-      }
+  const identityMap = new Map(identityRows.map((i) => [i.handle, i]));
 
-      const plainContent = stripHtmlTags(status.content);
-      const postedAt = new Date(status.created_at);
-      const dedupeHash = computeDedupeHash(plainContent);
-      const media = status.media_attachments.map((m) => ({
-        type: m.type,
-        url: m.url,
-        alt: m.description || "",
-      }));
-
-      await db
-        .insert(posts)
-        .values({
-          userId,
-          postType: "mention",
-          platformIdentityId: identity.id,
-          platform: "mastodon",
-          platformPostId: status.id,
-          postUrl: status.url || null,
-          content: plainContent,
-          contentHtml: status.content,
-          media: media.length > 0 ? media : null,
-          replyToId: status.in_reply_to_id || null,
-          likeCount: status.favourites_count || 0,
-          repostCount: status.reblogs_count || 0,
-          replyCount: status.replies_count || 0,
-          postedAt,
-          dedupeHash,
-        })
-        .onDuplicateKeyUpdate({
-          set: {
-            content: plainContent,
-            contentHtml: status.content,
-            postUrl: status.url || null,
-            likeCount: status.favourites_count || 0,
-            repostCount: status.reblogs_count || 0,
-            replyCount: status.replies_count || 0,
-            fetchedAt: new Date(),
-          },
-        });
-
-      stored++;
-    } catch (err) {
-      console.error(`Failed to store Mastodon mention ${notification.id}:`, err);
+  // Insert any missing identities (people who mentioned us but aren't followed)
+  const missingStatuses = statuses.filter((s) => !identityMap.has(handleOf(s.account.acct)));
+  if (missingStatuses.length > 0) {
+    const newIdentityRows = missingStatuses.map((s) => ({
+      userId,
+      platform: "mastodon" as const,
+      handle: handleOf(s.account.acct),
+      did: s.account.id,
+      displayName: s.account.display_name || null,
+      avatarUrl: s.account.avatar || null,
+      profileUrl: s.account.url,
+      isFollowed: false,
+    }));
+    // Insert individually to get back insertIds (batch insert doesn't return per-row IDs)
+    for (const row of newIdentityRows) {
+      const [result] = await db.insert(platformIdentities).values(row)
+        .onDuplicateKeyUpdate({ set: { did: row.did, displayName: row.displayName, avatarUrl: row.avatarUrl } });
+      identityMap.set(row.handle, { id: result.insertId } as typeof identityRows[0]);
     }
   }
-  console.log(`[mastodon] DB upsert loop (${notifications.length} notifications): ${Date.now() - tDb}ms, stored=${stored}`);
 
-  return { stored };
+  // Build all post rows in memory
+  const rows = [];
+  for (const status of statuses) {
+    const handle = handleOf(status.account.acct);
+    const identity = identityMap.get(handle);
+    if (!identity) continue;
+
+    const plainContent = stripHtmlTags(status.content);
+    const media = status.media_attachments.map((m) => ({
+      type: m.type,
+      url: m.url,
+      alt: m.description || "",
+    }));
+
+    rows.push({
+      userId,
+      postType: "mention" as const,
+      platformIdentityId: identity.id,
+      platform: "mastodon" as const,
+      platformPostId: status.id,
+      postUrl: status.url || null,
+      content: plainContent,
+      contentHtml: status.content,
+      media: media.length > 0 ? media : null,
+      replyToId: status.in_reply_to_id || null,
+      likeCount: status.favourites_count || 0,
+      repostCount: status.reblogs_count || 0,
+      replyCount: status.replies_count || 0,
+      postedAt: new Date(status.created_at),
+      dedupeHash: computeDedupeHash(plainContent),
+    });
+  }
+
+  // Single batch upsert
+  if (rows.length > 0) {
+    await db.insert(posts).values(rows).onDuplicateKeyUpdate({
+      set: {
+        content: sql`values(${posts.content})`,
+        contentHtml: sql`values(${posts.contentHtml})`,
+        postUrl: sql`values(${posts.postUrl})`,
+        likeCount: sql`values(${posts.likeCount})`,
+        repostCount: sql`values(${posts.repostCount})`,
+        replyCount: sql`values(${posts.replyCount})`,
+        fetchedAt: new Date(),
+      },
+    });
+  }
+
+  console.log(`[mastodon] DB ops (${statuses.length} mentions, ${rows.length} rows): ${Date.now() - tDb}ms`);
+  return { stored: rows.length };
 }
 
 // ── Query timeline ─────────────────────────────────────────
