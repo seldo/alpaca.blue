@@ -1,6 +1,6 @@
 import { db } from "@/db";
 import { connectedAccounts, platformIdentities } from "@/db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq, and, sql } from "drizzle-orm";
 
 interface MastodonApp {
   client_id: string;
@@ -191,38 +191,32 @@ export async function importMastodonFollows(userId: number) {
       url
     );
 
-    for (const follow of accounts) {
-      const handle = follow.acct.includes("@")
-        ? `@${follow.acct}`
-        : `@${follow.acct}@${instanceHost}`;
+    const rows = accounts.map((follow) => ({
+      userId,
+      platform: "mastodon" as const,
+      handle: follow.acct.includes("@") ? `@${follow.acct}` : `@${follow.acct}@${instanceHost}`,
+      did: follow.id,
+      displayName: follow.display_name || null,
+      avatarUrl: follow.avatar || null,
+      bio: follow.note || null,
+      profileUrl: follow.url,
+      isFollowed: true,
+      rawProfile: follow as unknown as Record<string, unknown>,
+    }));
 
-      await db
-        .insert(platformIdentities)
-        .values({
-          userId,
-          platform: "mastodon",
-          handle,
-          did: follow.id,
-          displayName: follow.display_name || null,
-          avatarUrl: follow.avatar || null,
-          bio: follow.note || null,
-          profileUrl: follow.url,
+    if (rows.length > 0) {
+      await db.insert(platformIdentities).values(rows).onDuplicateKeyUpdate({
+        set: {
+          did: sql`values(${platformIdentities.did})`,
+          displayName: sql`values(${platformIdentities.displayName})`,
+          avatarUrl: sql`values(${platformIdentities.avatarUrl})`,
+          bio: sql`values(${platformIdentities.bio})`,
           isFollowed: true,
-          rawProfile: follow as unknown as Record<string, unknown>,
-        })
-        .onDuplicateKeyUpdate({
-          set: {
-            did: follow.id,
-            displayName: follow.display_name || null,
-            avatarUrl: follow.avatar || null,
-            bio: follow.note || null,
-            isFollowed: true,
-            rawProfile: follow as unknown as Record<string, unknown>,
-            updatedAt: new Date(),
-          },
-        });
-
-      imported++;
+          rawProfile: sql`values(${platformIdentities.rawProfile})`,
+          updatedAt: new Date(),
+        },
+      });
+      imported += rows.length;
     }
 
     url = nextUrl;

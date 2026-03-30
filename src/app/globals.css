@@ -390,6 +390,7 @@ body {
   text-transform: uppercase;
   letter-spacing: 0.05em;
   color: var(--color-text-muted);
+  margin-top: 24px;
   margin-bottom: 16px;
 }
 
@@ -1750,6 +1751,10 @@ a.post-timestamp:hover {
   .settings-mobile-only {
     display: block;
   }
+}
+
+.settings-action-btn {
+  margin-top: 12px;
 }
 
 .settings-danger-zone {

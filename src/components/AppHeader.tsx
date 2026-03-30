@@ -71,21 +71,10 @@ export function AppLayout({ children, blueskyAgent }: { children: ReactNode; blu
               title="Profile"
             >
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                <circle cx="12" cy="7" r="4" />
+                <circle cx="12" cy="8" r="4" />
+                <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" />
               </svg>
               <span className="app-sidebar-label">Profile</span>
-            </a>
-            <a
-              href="/"
-              className={`app-sidebar-item${pathname === "/" ? " app-sidebar-active" : ""}`}
-              title="Accounts"
-            >
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-                <circle cx="12" cy="7" r="4" />
-              </svg>
-              <span className="app-sidebar-label">Accounts</span>
             </a>
             <a
               href="/timeline"
@@ -175,14 +164,8 @@ export function AppLayout({ children, blueskyAgent }: { children: ReactNode; blu
       <nav className="app-bottombar">
         <a href="/profile" className={`app-bottombar-item${pathname === "/profile" ? " app-bottombar-active" : ""}`}>
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-            <circle cx="12" cy="7" r="4" />
-          </svg>
-        </a>
-        <a href="/" className={`app-bottombar-item${pathname === "/" ? " app-bottombar-active" : ""}`}>
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
-            <circle cx="12" cy="7" r="4" />
+            <circle cx="12" cy="8" r="4" />
+            <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" />
           </svg>
         </a>
         <a href="/timeline" className={`app-bottombar-item${pathname === "/timeline" || pathname.startsWith("/posts/") ? " app-bottombar-active" : ""}`}>

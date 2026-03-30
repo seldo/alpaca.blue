@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
+import { useRouter } from "next/navigation";
 import {
   getBlueskyAgent,
   setBlueskyAgent,
@@ -237,6 +238,7 @@ function isAuthError(err: unknown): boolean {
 }
 
 export default function TimelinePage() {
+  const router = useRouter();
   const [posts, setPosts] = useState<PostData[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -435,6 +437,12 @@ export default function TimelinePage() {
     return () => clearTimeout(timer);
   }, [refreshFeed]);
 
+  useEffect(() => {
+    if (!loading && posts.length === 0) {
+      router.replace("/settings");
+    }
+  }, [loading, posts.length, router]);
+
   // Restore scroll position after posts have rendered
   useLayoutEffect(() => {
     if (pendingScrollRestore.current !== null && posts.length > 0) {
@@ -498,12 +506,6 @@ export default function TimelinePage() {
         <div className="spinner-container">
           <div className="spinner" />
         </div>
-      )}
-
-      {!loading && posts.length === 0 && (
-        <p className="text-muted" style={{ textAlign: "center", padding: "40px 0" }}>
-          No posts yet. Make sure you&apos;ve connected and imported your accounts, then pull down to refresh.
-        </p>
       )}
 
       {!loading && (

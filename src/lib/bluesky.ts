@@ -1,6 +1,7 @@
 import { db } from "@/db";
 import { connectedAccounts, platformIdentities } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
+import { sql } from "drizzle-orm";
 
 export interface BlueskyFollowData {
   handle: string;
@@ -15,44 +16,34 @@ export async function storeBlueskyFollows(
   follows: BlueskyFollowData[],
   userId: number
 ) {
-  let imported = 0;
-  const errors: Array<{ handle: string; error: string }> = [];
+  if (follows.length === 0) return { imported: 0, errors: 0 };
 
-  for (const follow of follows) {
-    try {
-      await db
-        .insert(platformIdentities)
-        .values({
-          userId,
-          platform: "bluesky",
-          handle: follow.handle,
-          did: follow.did,
-          displayName: follow.displayName || null,
-          avatarUrl: follow.avatar || null,
-          bio: follow.description || null,
-          profileUrl: `https://bsky.app/profile/${follow.handle}`,
-          isFollowed: true,
-          rawProfile: follow as unknown as Record<string, unknown>,
-        })
-        .onDuplicateKeyUpdate({
-          set: {
-            did: follow.did,
-            displayName: follow.displayName || null,
-            avatarUrl: follow.avatar || null,
-            bio: follow.description || null,
-            isFollowed: true,
-            rawProfile: follow as unknown as Record<string, unknown>,
-            updatedAt: new Date(),
-          },
-        });
+  const rows = follows.map((follow) => ({
+    userId,
+    platform: "bluesky" as const,
+    handle: follow.handle,
+    did: follow.did,
+    displayName: follow.displayName || null,
+    avatarUrl: follow.avatar || null,
+    bio: follow.description || null,
+    profileUrl: `https://bsky.app/profile/${follow.handle}`,
+    isFollowed: true,
+    rawProfile: follow as unknown as Record<string, unknown>,
+  }));
 
-      imported++;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.error(`Failed to import ${follow.handle}:`, message);
-      errors.push({ handle: follow.handle, error: message });
-    }
-  }
+  await db.insert(platformIdentities).values(rows).onDuplicateKeyUpdate({
+    set: {
+      did: sql`values(${platformIdentities.did})`,
+      displayName: sql`values(${platformIdentities.displayName})`,
+      avatarUrl: sql`values(${platformIdentities.avatarUrl})`,
+      bio: sql`values(${platformIdentities.bio})`,
+      isFollowed: true,
+      rawProfile: sql`values(${platformIdentities.rawProfile})`,
+      updatedAt: new Date(),
+    },
+  });
+
+  const imported = follows.length;
 
   await db
     .update(connectedAccounts)
@@ -64,9 +55,5 @@ export async function storeBlueskyFollows(
       )
     );
 
-  if (errors.length > 0) {
-    console.error(`Import completed with ${errors.length} failures:`, errors);
-  }
-
-  return { imported, errors: errors.length };
+  return { imported, errors: 0 };
 }
