@@ -32,7 +32,7 @@ src/
       auth/bluesky/route.ts           # Complete Bluesky OAuth — create/find user, set session
       auth/mastodon/route.ts           # Start Mastodon OAuth (accepts handles like @user@instance)
       auth/mastodon/callback/route.ts  # Complete Mastodon OAuth
-      auth/me/route.ts                 # GET current user info (avatar, handle, display name)
+      auth/me/route.ts                 # GET current user info (avatar, handle, display name, blueskyDid)
       auth/logout/route.ts             # POST clear session
       client-metadata/route.ts         # AT Protocol OAuth client metadata
       accounts/route.ts                # List connected accounts for current user
@@ -59,12 +59,13 @@ src/
     PersonCard.tsx                     # Person card with linked identities
     SuggestionCard.tsx                 # Identity match suggestion card
   lib/
-    bluesky-oauth.ts                   # Bluesky OAuth client + agent caching + session cleanup
+    bluesky-oauth.ts                   # Bluesky OAuth client + agent caching + session restore
     bluesky.ts                         # Server-side Bluesky follow storage
     mastodon.ts                        # Mastodon OAuth + follow import + mentions fetch
     identity-resolution.ts             # Heuristic + LLM identity matching
     posts.ts                           # Post storage, dedup hashing, Mastodon mentions
     session.ts                         # iron-session config (SessionData, getSession, requireSession)
+    usePullToRefresh.ts                # Hook: pull-to-refresh via touch drag + wheel overscroll
   db/
     schema.ts                          # Drizzle schema (users, connectedAccounts, platformIdentities, persons, posts, matchSuggestions)
     index.ts                           # DB connection (mysql2 pool with SSL)
@@ -114,6 +115,25 @@ public/
 ### Phase 5: Deploy — COMPLETE
 - Deployed to Netlify at alpaca.blue
 - Performance tuning (pagination, caching) — ongoing
+
+### Phase 6: Reliability & UX Polish — IN PROGRESS
+- Pull-to-refresh: touch drag (mobile) + wheel overscroll (desktop), no Refresh button
+- Bluesky session handling: use `client.restore(did)` on normal page loads instead of
+  `client.init()` (which is only for the OAuth redirect callback). Calling init() on
+  normal loads causes it to silently consume the refresh token and return undefined,
+  then a subsequent restore() call fails with "Refresh token replayed". The DID for
+  restore() comes from `/api/auth/me`.
+- Concurrent restore calls deduplicated with a singleton promise in bluesky-oauth.ts
+- Surface Bluesky/Mastodon fetch errors to the user instead of failing silently
+- Log out button shown inline when session is detected as expired
+
+## Bluesky OAuth Notes
+
+- `client.init()` is ONLY for handling the OAuth redirect callback (URL has `?code=`). Do NOT call it on normal page loads — it silently consumes the refresh token and returns undefined, causing subsequent `restore()` calls to fail with "Refresh token replayed".
+- On normal page loads, use `restoreBlueskySession()` from `bluesky-oauth.ts`, which calls `client.restore(did)`. The DID comes from `/api/auth/me`.
+- Access tokens expire after ~2 hours. `restore()` automatically uses the refresh token (90-day sliding window) to get a new one. Bluesky uses one-time-use refresh tokens that rotate on each use.
+- The DPoP private key is stored as a non-exportable `CryptoKey` in IndexedDB. If the browser clears IndexedDB (Safari does this for infrequently visited sites), the session cannot be recovered and the user must log out and back in.
+- `restoreBlueskySession()` is deduped with a singleton promise to prevent concurrent calls from racing and causing "Refresh token replayed".
 
 ## Database Notes
 
