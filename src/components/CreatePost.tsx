@@ -127,46 +127,66 @@ export function CreatePost({ blueskyAgent, onClose, onPosted }: CreatePostProps)
     const results: string[] = [];
     const errors: string[] = [];
 
-    // Post to Bluesky
-    if (blueskyAgent) {
+    // When images are present, Mastodon goes first — Bluesky only posts if Mastodon succeeds
+    if (images.length > 0) {
+      let mastodonOk = false;
       try {
-        if (images.length > 0) {
+        const mediaIds = await uploadToMastodon();
+        const res = await fetch("/api/posts/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content, mediaIds }),
+        });
+        if (res.ok) {
+          results.push("Mastodon");
+          mastodonOk = true;
+        } else {
+          errors.push("Mastodon");
+        }
+      } catch (err) {
+        console.error("Mastodon post error:", err);
+        errors.push("Mastodon");
+      }
+
+      if (mastodonOk && blueskyAgent) {
+        try {
           const blueskyImages = await uploadToBluesky(blueskyAgent);
           await blueskyAgent.post({
             text: content,
-            embed: {
-              $type: "app.bsky.embed.images",
-              images: blueskyImages,
-            },
+            embed: { $type: "app.bsky.embed.images", images: blueskyImages },
           });
-        } else {
-          await blueskyAgent.post({ text: content });
+          results.push("Bluesky");
+        } catch (err) {
+          console.error("Bluesky post error:", err);
+          errors.push("Bluesky");
         }
-        results.push("Bluesky");
-      } catch (err) {
-        console.error("Bluesky post error:", err);
-        errors.push("Bluesky");
       }
-    }
+    } else {
+      // No images — post to both independently
+      if (blueskyAgent) {
+        try {
+          await blueskyAgent.post({ text: content });
+          results.push("Bluesky");
+        } catch (err) {
+          console.error("Bluesky post error:", err);
+          errors.push("Bluesky");
+        }
+      }
 
-    // Post to Mastodon
-    try {
-      let mediaIds: string[] = [];
-      if (images.length > 0) {
-        mediaIds = await uploadToMastodon();
-      }
-      const res = await fetch("/api/posts/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content, mediaIds }),
-      });
-      if (res.ok) {
-        results.push("Mastodon");
-      } else {
+      try {
+        const res = await fetch("/api/posts/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content }),
+        });
+        if (res.ok) {
+          results.push("Mastodon");
+        } else {
+          errors.push("Mastodon");
+        }
+      } catch {
         errors.push("Mastodon");
       }
-    } catch {
-      errors.push("Mastodon");
     }
 
     setPosting(false);
