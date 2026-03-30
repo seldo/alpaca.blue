@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
     const uploadForm = new FormData();
     uploadForm.append("file", file);
 
-    const response = await fetch(`${account.instanceUrl}/api/v1/media`, {
+    const response = await fetch(`${account.instanceUrl}/api/v2/media`, {
       method: "POST",
       headers: {
         Authorization: `Bearer ${account.accessToken}`,
@@ -45,7 +45,7 @@ export async function POST(request: NextRequest) {
       body: uploadForm,
     });
 
-    if (!response.ok || response.status === 202) {
+    if (!response.ok) {
       const text = await response.text();
       console.error("Mastodon media upload failed:", response.status, text);
       return NextResponse.json(
@@ -55,6 +55,24 @@ export async function POST(request: NextRequest) {
     }
 
     const media = await response.json();
+
+    // 202 means still processing — poll until ready
+    if (response.status === 202) {
+      for (let i = 0; i < 10; i++) {
+        await new Promise((resolve) => setTimeout(resolve, 1500));
+        const poll = await fetch(`${account.instanceUrl}/api/v1/media/${media.id}`, {
+          headers: { Authorization: `Bearer ${account.accessToken}` },
+        });
+        if (poll.ok) {
+          const polled = await poll.json();
+          if (polled.url) {
+            return NextResponse.json({ id: polled.id });
+          }
+        }
+      }
+      return NextResponse.json({ error: "Media processing timed out" }, { status: 504 });
+    }
+
     return NextResponse.json({ id: media.id });
   } catch (err) {
     console.error("Media upload error:", err);
