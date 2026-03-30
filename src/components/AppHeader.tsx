@@ -3,6 +3,8 @@
 import { useState, useEffect, type ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import { clearBlueskySession, setBlueskyAgent } from "@/lib/bluesky-oauth";
+import { CreatePost } from "@/components/CreatePost";
+import type { Agent } from "@atproto/api";
 
 interface UserInfo {
   id: number;
@@ -11,8 +13,9 @@ interface UserInfo {
   avatarUrl: string | null;
 }
 
-export function AppLayout({ children }: { children: ReactNode }) {
+export function AppLayout({ children, blueskyAgent }: { children: ReactNode; blueskyAgent?: Agent | null }) {
   const [user, setUser] = useState<UserInfo | null>(null);
+  const [composeOpen, setComposeOpen] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
 
@@ -56,6 +59,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
               </div>
             </div>
           )}
+
+          <button className="btn btn-primary app-sidebar-compose" onClick={() => setComposeOpen(true)}>
+            New Post
+          </button>
 
           <nav className="app-sidebar-nav">
             <a
@@ -134,6 +141,26 @@ export function AppLayout({ children }: { children: ReactNode }) {
       <div className="app-content">
         {children}
       </div>
+      <button className="app-fab" onClick={() => setComposeOpen(true)} title="New post">
+        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <line x1="12" y1="5" x2="12" y2="19" />
+          <line x1="5" y1="12" x2="19" y2="12" />
+        </svg>
+      </button>
+
+      {composeOpen && (
+        <div className="create-post-modal-backdrop" onClick={() => setComposeOpen(false)}>
+          <div className="create-post-modal" onClick={(e) => e.stopPropagation()}>
+            <p className="create-post-modal-title">New Post</p>
+            <CreatePost
+              blueskyAgent={blueskyAgent ?? null}
+              onClose={() => setComposeOpen(false)}
+              onPosted={() => setComposeOpen(false)}
+            />
+          </div>
+        </div>
+      )}
+
       <nav className="app-bottombar">
         <a href="/" className={`app-bottombar-item${pathname === "/" ? " app-bottombar-active" : ""}`}>
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">

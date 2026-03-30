@@ -9,6 +9,7 @@ import {
 import { usePullToRefresh } from "@/lib/usePullToRefresh";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
+import { CreatePost } from "@/components/CreatePost";
 
 interface PostData {
   id: number;
@@ -243,6 +244,7 @@ export default function TimelinePage() {
   const [fetchStatus, setFetchStatus] = useState("");
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [composeOpen, setComposeOpen] = useState(false);
   const agentRef = useRef<import("@atproto/api").Agent | null>(null);
   const pendingScrollRestore = useRef<number | null>(null);
 
@@ -477,7 +479,24 @@ export default function TimelinePage() {
   }
 
   return (
-    <AppLayout>
+    <AppLayout blueskyAgent={agentRef.current}>
+
+      {composeOpen ? (
+        <div className="create-post-modal-backdrop" onClick={() => setComposeOpen(false)}>
+          <div className="create-post-modal" onClick={(e) => e.stopPropagation()}>
+            <p className="create-post-modal-title">New Post</p>
+            <CreatePost
+              blueskyAgent={agentRef.current}
+              onClose={() => setComposeOpen(false)}
+              onPosted={() => { setComposeOpen(false); setTimeout(refreshFeed, 1000); }}
+            />
+          </div>
+        </div>
+      ) : (
+        <button className="create-post-trigger" onClick={() => setComposeOpen(true)}>
+          What&apos;s up?
+        </button>
+      )}
 
       {(pullDistance > 0 || pullRefreshing) && (
         <div className="pull-indicator" style={{ height: pullRefreshing ? 48 : pullDistance * 0.5 }}>
