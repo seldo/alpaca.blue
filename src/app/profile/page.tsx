@@ -89,15 +89,6 @@ export default function ProfilePage() {
   const agentRef = useRef<import("@atproto/api").Agent | null>(null);
   const isFetchingRef = useRef(false);
 
-  useEffect(() => {
-    const existing = getBlueskyAgent();
-    if (existing) { agentRef.current = existing; return; }
-    (async () => {
-      const agent = await restoreBlueskySession();
-      if (agent) agentRef.current = agent;
-    })();
-  }, []);
-
   const refreshPosts = useCallback(async () => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
@@ -152,15 +143,22 @@ export default function ProfilePage() {
   }, []);
 
   useEffect(() => {
-    Promise.all([
-      fetch("/api/auth/me").then((r) => r.json()),
-      fetch("/api/accounts").then((r) => r.json()),
-    ]).then(([me, accts]) => {
-      setUser(me);
-      setAccounts(accts);
-    }).catch(() => {});
+    async function init() {
+      let agent = getBlueskyAgent();
+      if (!agent) agent = await restoreBlueskySession();
+      if (agent) agentRef.current = agent;
 
-    refreshPosts();
+      Promise.all([
+        fetch("/api/auth/me").then((r) => r.json()),
+        fetch("/api/accounts").then((r) => r.json()),
+      ]).then(([me, accts]) => {
+        setUser(me);
+        setAccounts(accts);
+      }).catch(() => {});
+
+      refreshPosts();
+    }
+    init();
   }, [refreshPosts]);
 
   async function loadMore() {
