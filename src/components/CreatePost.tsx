@@ -11,6 +11,48 @@ interface CreatePostProps {
 
 const MAX_IMAGES = 4;
 const MAX_LENGTH = 300;
+const MAX_DIMENSION = 2048;
+const JPEG_QUALITY = 0.85;
+
+async function compressImage(file: File): Promise<File> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+
+      let { width, height } = img;
+      if (width > MAX_DIMENSION || height > MAX_DIMENSION) {
+        if (width > height) {
+          height = Math.round((height * MAX_DIMENSION) / width);
+          width = MAX_DIMENSION;
+        } else {
+          width = Math.round((width * MAX_DIMENSION) / height);
+          height = MAX_DIMENSION;
+        }
+      }
+
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d")!;
+      ctx.drawImage(img, 0, 0, width, height);
+
+      canvas.toBlob(
+        (blob) => {
+          if (!blob) { reject(new Error("Canvas toBlob failed")); return; }
+          resolve(new File([blob], file.name.replace(/\.[^.]+$/, ".jpg"), { type: "image/jpeg" }));
+        },
+        "image/jpeg",
+        JPEG_QUALITY
+      );
+    };
+
+    img.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error("Image load failed")); };
+    img.src = objectUrl;
+  });
+}
 
 export function CreatePost({ blueskyAgent, onClose, onPosted }: CreatePostProps) {
   const [text, setText] = useState("");
@@ -24,21 +66,22 @@ export function CreatePost({ blueskyAgent, onClose, onPosted }: CreatePostProps)
   const hasContent = text.trim().length > 0 || images.length > 0;
   const canPost = hasContent && text.length <= MAX_LENGTH && !posting;
 
-  function handleImageSelect(e: React.ChangeEvent<HTMLInputElement>) {
+  async function handleImageSelect(e: React.ChangeEvent<HTMLInputElement>) {
     const files = Array.from(e.target.files || []);
     if (!files.length) return;
 
     const remaining = MAX_IMAGES - images.length;
     const toAdd = files.slice(0, remaining);
 
-    setImages((prev) => [...prev, ...toAdd]);
-    setPreviews((prev) => [
-      ...prev,
-      ...toAdd.map((f) => URL.createObjectURL(f)),
-    ]);
-
     // Reset input so same file can be re-selected after removal
     if (fileInputRef.current) fileInputRef.current.value = "";
+
+    const compressed = await Promise.all(toAdd.map(compressImage));
+    setImages((prev) => [...prev, ...compressed]);
+    setPreviews((prev) => [
+      ...prev,
+      ...compressed.map((f) => URL.createObjectURL(f)),
+    ]);
   }
 
   function removeImage(index: number) {
