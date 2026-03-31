@@ -243,41 +243,49 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
     []
   );
 
-  async function handleFavorite(e: React.MouseEvent) {
+  function handleFavorite(e: React.MouseEvent) {
     e.stopPropagation();
     if (favoriting) return;
-    setFavoriting(true);
 
-    try {
-      if (post.platform === "bluesky") {
-        const agent = blueskyAgent ?? getBlueskyAgent();
-        if (!agent || !post.platformPostCid) {
-          console.warn("Cannot favorite: missing agent or CID");
-          return;
-        }
-        if (favorited) {
-          // We don't have the like URI stored, so we can't unfavorite Bluesky posts yet
-          return;
-        }
-        await agent.like(post.platformPostId, post.platformPostCid);
-        setFavorited(true);
-        setLocalLikeCount((c) => c + 1);
-      } else if (post.platform === "mastodon") {
-        const res = await fetch(`/api/posts/${post.id}/favorite`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ unfavorite: favorited }),
-        });
-        if (res.ok) {
-          const data = await res.json();
-          setFavorited(data.favorited);
-          setLocalLikeCount(data.likeCount);
-        }
+    if (post.platform === "bluesky") {
+      const agent = blueskyAgent ?? getBlueskyAgent();
+      if (!agent || !post.platformPostCid) {
+        console.warn("Cannot favorite: missing agent or CID");
+        return;
       }
-    } catch (err) {
-      console.error("Favorite error:", err);
-    } finally {
-      setFavoriting(false);
+      if (favorited) return; // Can't unfavorite without stored like URI
+      // Optimistic update
+      setFavorited(true);
+      setLocalLikeCount((c) => c + 1);
+      setFavoriting(true);
+      agent.like(post.platformPostId, post.platformPostCid).catch((err) => {
+        console.error("Favorite error:", err);
+        setFavorited(false);
+        setLocalLikeCount((c) => c - 1);
+      }).finally(() => setFavoriting(false));
+    } else if (post.platform === "mastodon") {
+      const nextFavorited = !favorited;
+      const delta = nextFavorited ? 1 : -1;
+      // Optimistic update
+      setFavorited(nextFavorited);
+      setLocalLikeCount((c) => c + delta);
+      setFavoriting(true);
+      fetch(`/api/posts/${post.id}/favorite`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ unfavorite: favorited }),
+      }).then((res) => {
+        if (res.ok) return res.json();
+        throw new Error("Favorite failed");
+      }).then((data) => {
+        setFavorited(data.favorited);
+        setLocalLikeCount(data.likeCount);
+      }).catch((err) => {
+        console.error("Favorite error:", err);
+        // Roll back
+        setFavorited(favorited);
+        setLocalLikeCount((c) => c - delta);
+      }).finally(() => setFavoriting(false));
     }
   }
 
@@ -715,7 +723,6 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
         <button
           className={`post-favorite-btn${favorited ? " post-favorited" : ""}`}
           onClick={handleFavorite}
-          disabled={favoriting}
           title={favorited ? "Unfavorite" : "Favorite"}
         >
           <svg className="post-stat-icon" width="16" height="16" viewBox="0 0 24 24" fill={favorited ? "currentColor" : "none"} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
