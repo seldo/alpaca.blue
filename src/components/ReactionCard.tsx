@@ -87,6 +87,9 @@ export function ReactionCard({ group }: { group: ReactionGroup }) {
           <span className="reaction-card-icon" style={{ color: ICON_COLORS[group.reactionType] }}>
             <ReactionIcon type={group.reactionType} />
           </span>
+          <span className={`platform-badge ${group.platform === "both" ? "bluesky" : group.platform}`} title={group.platform === "both" ? "Bluesky & Mastodon" : group.platform === "bluesky" ? "Bluesky" : "Mastodon"}>
+            {group.platform === "mastodon" ? "M" : "B"}
+          </span>
           <div className="reaction-card-avatars">
             {group.reactors.slice(0, 5).map((r, i) =>
               r.avatarUrl ? (
@@ -107,8 +110,13 @@ export function ReactionCard({ group }: { group: ReactionGroup }) {
   );
 
   if (group.subjectUrl) {
+    const isInternal = group.subjectUrl.startsWith("/");
     return (
-      <a href={group.subjectUrl} target="_blank" rel="noopener noreferrer" className="reaction-card-link">
+      <a
+        href={group.subjectUrl}
+        {...(!isInternal && { target: "_blank", rel: "noopener noreferrer" })}
+        className="reaction-card-link"
+      >
         {content}
       </a>
     );

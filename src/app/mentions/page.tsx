@@ -330,16 +330,56 @@ export default function MentionsPage() {
           ].slice(0, 25); // getPosts max is 25
 
           const subjectTextMap = new Map<string, string>(); // uri -> text
+          const subjectMetaMap = new Map<string, { handle: string; displayName?: string; avatar?: string; postedAt?: string }>(); // uri -> author meta
           if (subjectUris.length > 0) {
             try {
               const subjectsRes = await agent.getPosts({ uris: subjectUris });
               for (const p of subjectsRes.data.posts) {
                 const record = (p as unknown as { record: { text?: string } }).record;
+                const author = (p as unknown as { author: { handle: string; displayName?: string; avatar?: string } }).author;
+                const indexedAt = (p as unknown as { indexedAt?: string }).indexedAt;
                 subjectTextMap.set(p.uri, record?.text || "");
+                subjectMetaMap.set(p.uri, {
+                  handle: author?.handle || "",
+                  displayName: author?.displayName,
+                  avatar: author?.avatar,
+                  postedAt: indexedAt,
+                });
               }
             } catch (err) {
               console.warn("Failed to fetch reaction subject posts:", err);
             }
+          }
+
+          // Look up internal post IDs for subject URIs
+          const subjectInternalIdMap = new Map<string, number>(); // uri -> internal post id
+          if (subjectUris.length > 0) {
+            await Promise.allSettled(
+              subjectUris.map(async (uri) => {
+                const meta = subjectMetaMap.get(uri);
+                const text = subjectTextMap.get(uri) ?? "";
+                try {
+                  const res = await fetch("/api/posts/lookup", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      uri,
+                      authorHandle: meta?.handle ?? "",
+                      authorDisplayName: meta?.displayName,
+                      authorAvatar: meta?.avatar,
+                      text,
+                      postedAt: meta?.postedAt,
+                    }),
+                  });
+                  if (res.ok) {
+                    const data = await res.json();
+                    if (data.id) subjectInternalIdMap.set(uri, data.id);
+                  }
+                } catch {
+                  // ignore — subjectUrl will be null
+                }
+              })
+            );
           }
 
           // Map reaction notifications to RawReaction
@@ -352,13 +392,15 @@ export default function MentionsPage() {
 
             const subjectId = n.reasonSubject ?? null;
             const subjectText = subjectId ? (subjectTextMap.get(subjectId) ?? null) : null;
+            const internalId = subjectId ? subjectInternalIdMap.get(subjectId) : undefined;
+            const subjectUrl = internalId ? `/posts/${internalId}` : null;
 
             blueskyReactions.push({
               platform: "bluesky",
               reactionType,
               subjectId,
               subjectExcerpt: subjectText,
-              subjectUrl: null, // Bluesky post URLs need handle resolution; subject text is enough
+              subjectUrl,
               reactor: {
                 handle: n.author.handle,
                 displayName: n.author.displayName || n.author.handle,

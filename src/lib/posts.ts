@@ -629,9 +629,26 @@ export async function fetchMastodonReactions(
     status?: { id: string; url: string; content: string };
   }> = await response.json();
 
-  const reactions = notifications
-    .filter((n) => n.type === "favourite" || n.type === "reblog" || n.type === "follow")
-    .map((n) => {
+  const filtered = notifications.filter(
+    (n) => n.type === "favourite" || n.type === "reblog" || n.type === "follow"
+  );
+
+  // Look up internal post IDs for subject statuses
+  const statusIds = [...new Set(
+    filtered.map((n) => n.status?.id).filter((id): id is string => !!id)
+  )];
+  const internalIdMap = new Map<string, number>(); // mastodon status id -> internal post id
+  if (statusIds.length > 0) {
+    const rows = await db
+      .select({ id: posts.id, platformPostId: posts.platformPostId })
+      .from(posts)
+      .where(and(eq(posts.userId, userId), inArray(posts.platformPostId, statusIds)));
+    for (const row of rows) {
+      internalIdMap.set(row.platformPostId, row.id);
+    }
+  }
+
+  const reactions = filtered.map((n) => {
       const handle = n.account.acct.includes("@")
         ? `@${n.account.acct}`
         : `@${n.account.acct}@${instanceHost}`;
@@ -642,13 +659,16 @@ export async function fetchMastodonReactions(
         avatarUrl: n.account.avatar,
       };
 
+      const internalId = n.status?.id ? internalIdMap.get(n.status.id) : undefined;
+      const subjectUrl = internalId ? `/posts/${internalId}` : null;
+
       if (n.type === "favourite") {
         return {
           platform: "mastodon" as const,
           reactionType: "like" as const,
           subjectId: n.status?.id ?? null,
           subjectExcerpt: n.status ? stripHtmlTags(n.status.content) : null,
-          subjectUrl: n.status?.url ?? null,
+          subjectUrl,
           reactor,
           reactedAt: n.created_at,
         };
@@ -658,7 +678,7 @@ export async function fetchMastodonReactions(
           reactionType: "repost" as const,
           subjectId: n.status?.id ?? null,
           subjectExcerpt: n.status ? stripHtmlTags(n.status.content) : null,
-          subjectUrl: n.status?.url ?? null,
+          subjectUrl,
           reactor,
           reactedAt: n.created_at,
         };
