@@ -71,6 +71,7 @@ export const platformIdentities = mysqlTable(
       table.handle
     ),
     index("person_id_idx").on(table.personId),
+    index("platform_did_user_idx").on(table.userId, table.platform, table.did),
   ]
 );
 
@@ -117,6 +118,7 @@ export const posts = mysqlTable(
     ),
     index("dedupe_hash_idx").on(table.dedupeHash),
     index("posted_at_idx").on(table.postedAt),
+    index("user_type_posted_idx").on(table.userId, table.postType, table.postedAt),
   ]
 );
 

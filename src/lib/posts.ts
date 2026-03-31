@@ -133,29 +133,39 @@ export async function storeBlueskyPosts(
 
   const identityMap = new Map(identityRows.map((i) => [i.did!, i]));
 
-  // Upsert all identities to keep avatar/displayName fresh; insert new ones for mentions
-  // We need insertIds for new rows, so we do individual upserts for missing mentions
+  // Insert new mention identities (people who mentioned us but aren't followed)
   const missingMentions = postsData.filter(
     (p) => p.postType === "mention" && !identityMap.has(p.authorDid)
   );
-  for (const post of missingMentions) {
-    const [result] = await db.insert(platformIdentities).values({
+  if (missingMentions.length > 0) {
+    const newRows = missingMentions.map((post) => ({
       userId,
-      platform: "bluesky",
+      platform: "bluesky" as const,
       handle: post.authorHandle,
       did: post.authorDid,
       displayName: post.authorDisplayName || null,
       avatarUrl: post.authorAvatar || null,
       profileUrl: `https://bsky.app/profile/${post.authorHandle}`,
       isFollowed: false,
-    }).onDuplicateKeyUpdate({
+    }));
+    await db.insert(platformIdentities).values(newRows).onDuplicateKeyUpdate({
       set: {
-        handle: post.authorHandle,
-        displayName: post.authorDisplayName || null,
-        avatarUrl: post.authorAvatar || null,
+        handle: sql`values(${platformIdentities.handle})`,
+        displayName: sql`values(${platformIdentities.displayName})`,
+        avatarUrl: sql`values(${platformIdentities.avatarUrl})`,
       },
     });
-    identityMap.set(post.authorDid, { id: result.insertId } as typeof identityRows[0]);
+    const newDids = [...new Set(missingMentions.map((p) => p.authorDid))];
+    const insertedRows = await db.select().from(platformIdentities).where(
+      and(
+        eq(platformIdentities.userId, userId),
+        eq(platformIdentities.platform, "bluesky"),
+        inArray(platformIdentities.did, newDids)
+      )
+    );
+    for (const row of insertedRows) {
+      identityMap.set(row.did!, row);
+    }
   }
 
 
@@ -382,11 +392,23 @@ export async function fetchAndStoreMastodonMentions(
       profileUrl: s.account.url,
       isFollowed: false,
     }));
-    // Insert individually to get back insertIds (batch insert doesn't return per-row IDs)
-    for (const row of newIdentityRows) {
-      const [result] = await db.insert(platformIdentities).values(row)
-        .onDuplicateKeyUpdate({ set: { did: row.did, displayName: row.displayName, avatarUrl: row.avatarUrl } });
-      identityMap.set(row.handle, { id: result.insertId } as typeof identityRows[0]);
+    await db.insert(platformIdentities).values(newIdentityRows).onDuplicateKeyUpdate({
+      set: {
+        did: sql`values(${platformIdentities.did})`,
+        displayName: sql`values(${platformIdentities.displayName})`,
+        avatarUrl: sql`values(${platformIdentities.avatarUrl})`,
+      },
+    });
+    const newHandles = newIdentityRows.map((r) => r.handle);
+    const insertedRows = await db.select().from(platformIdentities).where(
+      and(
+        eq(platformIdentities.userId, userId),
+        eq(platformIdentities.platform, "mastodon"),
+        inArray(platformIdentities.handle, newHandles)
+      )
+    );
+    for (const row of insertedRows) {
+      identityMap.set(row.handle, row);
     }
   }
 
