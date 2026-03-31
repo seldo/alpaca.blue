@@ -589,6 +589,96 @@ export async function fetchAndStoreOwnMastodonPosts(
   return { stored: rows.length, identityId: identity.id };
 }
 
+// ── Fetch Mastodon reactions (likes, reposts, follows) ────
+
+import type { RawReaction } from "@/lib/reactions";
+
+export async function fetchMastodonReactions(
+  userId: number
+): Promise<RawReaction[]> {
+  const cacheKey = keys.mastodonReactions(userId);
+  const cached = await redis.get<RawReaction[]>(cacheKey).catch(() => null);
+  if (cached) {
+    console.log("[mastodon] reactions cache hit");
+    return cached;
+  }
+
+  const [account] = await db
+    .select()
+    .from(connectedAccounts)
+    .where(and(eq(connectedAccounts.userId, userId), eq(connectedAccounts.platform, "mastodon")))
+    .limit(1);
+
+  if (!account?.accessToken || !account.instanceUrl) return [];
+
+  const instanceUrl = account.instanceUrl;
+  const instanceHost = new URL(instanceUrl).hostname;
+
+  const response = await fetch(
+    `${instanceUrl}/api/v1/notifications?types[]=favourite&types[]=reblog&types[]=follow&limit=50`,
+    { headers: { Authorization: `Bearer ${account.accessToken}` } }
+  );
+
+  if (!response.ok) return [];
+
+  const notifications: Array<{
+    id: string;
+    type: string;
+    created_at: string;
+    account: { id: string; username: string; acct: string; display_name: string; avatar: string };
+    status?: { id: string; url: string; content: string };
+  }> = await response.json();
+
+  const reactions = notifications
+    .filter((n) => n.type === "favourite" || n.type === "reblog" || n.type === "follow")
+    .map((n) => {
+      const handle = n.account.acct.includes("@")
+        ? `@${n.account.acct}`
+        : `@${n.account.acct}@${instanceHost}`;
+
+      const reactor = {
+        handle,
+        displayName: n.account.display_name || n.account.username,
+        avatarUrl: n.account.avatar,
+      };
+
+      if (n.type === "favourite") {
+        return {
+          platform: "mastodon" as const,
+          reactionType: "like" as const,
+          subjectId: n.status?.id ?? null,
+          subjectExcerpt: n.status ? stripHtmlTags(n.status.content) : null,
+          subjectUrl: n.status?.url ?? null,
+          reactor,
+          reactedAt: n.created_at,
+        };
+      } else if (n.type === "reblog") {
+        return {
+          platform: "mastodon" as const,
+          reactionType: "repost" as const,
+          subjectId: n.status?.id ?? null,
+          subjectExcerpt: n.status ? stripHtmlTags(n.status.content) : null,
+          subjectUrl: n.status?.url ?? null,
+          reactor,
+          reactedAt: n.created_at,
+        };
+      } else {
+        return {
+          platform: "mastodon" as const,
+          reactionType: "follow" as const,
+          subjectId: null,
+          subjectExcerpt: null,
+          subjectUrl: null,
+          reactor,
+          reactedAt: n.created_at,
+        };
+      }
+    });
+
+  await redis.set(cacheKey, reactions, { ex: TTL.mastodonReactions }).catch(() => {});
+  return reactions;
+}
+
 // ── Get user's own platform identity IDs ──────────────────
 
 export async function getOwnIdentityIds(userId: number): Promise<number[]> {

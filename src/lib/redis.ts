@@ -11,10 +11,13 @@ export const keys = {
     `mastodon:fetched:${userId}:${type}`,
   timelineCache: (userId: number, type: "timeline" | "mentions") =>
     `timeline:cache:${userId}:${type}`,
+  mastodonReactions: (userId: number) =>
+    `mastodon:reactions:${userId}`,
 };
 
 // TTLs (seconds)
 export const TTL = {
   mastodonFetchDebounce: 30,
   timelineCache: 60,
+  mastodonReactions: 60,
 };

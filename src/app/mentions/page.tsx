@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
+import { useState, useEffect, useCallback, useRef, useLayoutEffect, useMemo } from "react";
 import {
   getBlueskyAgent,
   setBlueskyAgent,
@@ -8,7 +8,9 @@ import {
 } from "@/lib/bluesky-oauth";
 import { usePullToRefresh } from "@/lib/usePullToRefresh";
 import { PostCard } from "@/components/PostCard";
+import { ReactionCard } from "@/components/ReactionCard";
 import { AppLayout } from "@/components/AppHeader";
+import type { RawReaction, ReactionGroup } from "@/lib/reactions";
 
 interface PostData {
   id: number;
@@ -177,6 +179,7 @@ function isAuthError(err: unknown): boolean {
 
 export default function MentionsPage() {
   const [posts, setPosts] = useState<PostData[]>([]);
+  const [reactionGroups, setReactionGroups] = useState<ReactionGroup[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [fetching, setFetching] = useState(false);
@@ -186,6 +189,16 @@ export default function MentionsPage() {
   const agentRef = useRef<import("@atproto/api").Agent | null>(null);
   const pendingScrollRestore = useRef<number | null>(null);
   const isFetchingRef = useRef(false);
+
+  // Merge posts and reactions into a single sorted feed
+  const feed = useMemo(() => {
+    type FeedItem = { sortKey: string; kind: "post"; data: PostData } | { sortKey: string; kind: "reaction"; data: ReactionGroup };
+    const items: FeedItem[] = [
+      ...posts.map((p) => ({ sortKey: p.postedAt, kind: "post" as const, data: p })),
+      ...reactionGroups.map((g) => ({ sortKey: g.latestAt, kind: "reaction" as const, data: g })),
+    ];
+    return items.sort((a, b) => b.sortKey.localeCompare(a.sortKey));
+  }, [posts, reactionGroups]);
 
   // Initialize Bluesky agent
   useEffect(() => {
@@ -205,7 +218,7 @@ export default function MentionsPage() {
     })();
   }, []);
 
-  const fetchMentions = useCallback(
+  const fetchMentionsCursor = useCallback(
     async (cursor?: string) => {
       const params = new URLSearchParams({ limit: "50", type: "mentions" });
       if (cursor) params.set("cursor", cursor);
@@ -232,29 +245,46 @@ export default function MentionsPage() {
     setFetchError(null);
 
     try {
-      // Fetch Bluesky mentions client-side, then send both to server in one call
-      let blueskyPosts: {
+      // Fetch Bluesky notifications client-side (needs DPoP agent)
+      let blueskyMentionPosts: {
         uri: string; cid: string; authorDid: string; authorHandle: string;
         text: string; contentHtml: string; createdAt: string;
         replyToUri?: string; postType: string;
         images?: Array<{ url: string; alt: string }>;
         quotedPost?: ReturnType<typeof extractQuotedPost>;
       }[] = [];
+      const blueskyReactions: RawReaction[] = [];
+
       const agent = agentRef.current;
       if (agent?.did) {
         try {
-          setFetchStatus("Fetching Bluesky mentions...");
+          setFetchStatus("Fetching Bluesky notifications...");
           const response = await agent.listNotifications({ limit: 50 });
-          const mentionNotifs = response.data.notifications
-            .filter((n: { reason: string }) => n.reason === "mention" || n.reason === "reply");
+          const notifications = response.data.notifications as Array<{
+            reason: string;
+            uri: string;
+            cid: string;
+            author: { did: string; handle: string; displayName?: string; avatar?: string };
+            record: unknown;
+            indexedAt: string;
+            reasonSubject?: string;
+          }>;
 
-          // Batch-fetch hydrated post views to get embed/image/author data
-          const uris = mentionNotifs.map((n: { uri: string }) => n.uri);
+          // Split into mentions/replies (stored as posts) vs reactions
+          const mentionNotifs = notifications.filter(
+            (n) => n.reason === "mention" || n.reason === "reply"
+          );
+          const reactionNotifs = notifications.filter(
+            (n) => n.reason === "like" || n.reason === "repost" || n.reason === "follow" || n.reason === "quote"
+          );
+
+          // Hydrate mention posts with embed data
+          const mentionUris = mentionNotifs.map((n) => n.uri);
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const hydratedMap = new Map<string, { embed?: unknown; authorDisplayName?: string; authorAvatar?: string }>();
-          if (uris.length > 0) {
+          if (mentionUris.length > 0) {
             try {
-              const postsRes = await agent.getPosts({ uris });
+              const postsRes = await agent.getPosts({ uris: mentionUris });
               for (const p of postsRes.data.posts) {
                 const hp = p as unknown as { embed?: unknown; author: { displayName?: string; avatar?: string } };
                 hydratedMap.set(p.uri, {
@@ -268,29 +298,77 @@ export default function MentionsPage() {
             }
           }
 
-          blueskyPosts = mentionNotifs.map((n: { author: { did: string; handle: string }; record: unknown; uri: string; cid: string; indexedAt: string }) => {
-              const record = n.record as { text?: string; facets?: BlueskyFacet[]; reply?: { parent?: { uri?: string } } };
-              const text = record?.text || "";
-              const contentHtml = facetsToHtml(text, record?.facets);
-              const hydrated = hydratedMap.get(n.uri);
-              return {
-                uri: n.uri,
-                cid: n.cid,
-                authorDid: n.author.did,
-                authorHandle: n.author.handle,
-                authorDisplayName: hydrated?.authorDisplayName,
-                authorAvatar: hydrated?.authorAvatar,
-                text,
-                contentHtml,
-                createdAt: n.indexedAt,
-                replyToUri: record?.reply?.parent?.uri || undefined,
-                postType: "mention",
-                images: extractBlueskyImages(hydrated?.embed),
-                quotedPost: extractQuotedPost(hydrated?.embed),
-              };
+          blueskyMentionPosts = mentionNotifs.map((n) => {
+            const record = n.record as { text?: string; facets?: BlueskyFacet[]; reply?: { parent?: { uri?: string } } };
+            const text = record?.text || "";
+            const contentHtml = facetsToHtml(text, record?.facets);
+            const hydrated = hydratedMap.get(n.uri);
+            return {
+              uri: n.uri,
+              cid: n.cid,
+              authorDid: n.author.did,
+              authorHandle: n.author.handle,
+              authorDisplayName: hydrated?.authorDisplayName,
+              authorAvatar: hydrated?.authorAvatar,
+              text,
+              contentHtml,
+              createdAt: n.indexedAt,
+              replyToUri: record?.reply?.parent?.uri || undefined,
+              postType: "mention",
+              images: extractBlueskyImages(hydrated?.embed),
+              quotedPost: extractQuotedPost(hydrated?.embed),
+            };
+          });
+
+          // Batch-fetch subject post text for likes/reposts/quotes
+          const subjectUris = [
+            ...new Set(
+              reactionNotifs
+                .filter((n) => n.reasonSubject)
+                .map((n) => n.reasonSubject!)
+            ),
+          ].slice(0, 25); // getPosts max is 25
+
+          const subjectTextMap = new Map<string, string>(); // uri -> text
+          if (subjectUris.length > 0) {
+            try {
+              const subjectsRes = await agent.getPosts({ uris: subjectUris });
+              for (const p of subjectsRes.data.posts) {
+                const record = (p as unknown as { record: { text?: string } }).record;
+                subjectTextMap.set(p.uri, record?.text || "");
+              }
+            } catch (err) {
+              console.warn("Failed to fetch reaction subject posts:", err);
+            }
+          }
+
+          // Map reaction notifications to RawReaction
+          for (const n of reactionNotifs) {
+            const reactionType =
+              n.reason === "like" ? "like" :
+              n.reason === "repost" ? "repost" :
+              n.reason === "follow" ? "follow" :
+              "quote";
+
+            const subjectId = n.reasonSubject ?? null;
+            const subjectText = subjectId ? (subjectTextMap.get(subjectId) ?? null) : null;
+
+            blueskyReactions.push({
+              platform: "bluesky",
+              reactionType,
+              subjectId,
+              subjectExcerpt: subjectText,
+              subjectUrl: null, // Bluesky post URLs need handle resolution; subject text is enough
+              reactor: {
+                handle: n.author.handle,
+                displayName: n.author.displayName || n.author.handle,
+                avatarUrl: n.author.avatar || "",
+              },
+              reactedAt: n.indexedAt,
             });
+          }
         } catch (err) {
-          console.error("Bluesky mentions fetch error:", err instanceof Error ? err.message : err);
+          console.error("Bluesky notifications fetch error:", err instanceof Error ? err.message : err);
           if (isAuthError(err)) {
             setBlueskyAgent(null);
             agentRef.current = null;
@@ -301,23 +379,41 @@ export default function MentionsPage() {
         }
       }
 
-      setFetchStatus("Fetching Mastodon mentions...");
-      const res = await fetch("/api/posts/fetch", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ platform: "all", type: "mentions", posts: blueskyPosts }),
-      });
+      // Fetch mentions (stored as posts) + Mastodon reactions in parallel
+      setFetchStatus("Fetching mentions and reactions...");
+      const [mentionsResult, reactionsResult] = await Promise.allSettled([
+        fetch("/api/posts/fetch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ platform: "all", type: "mentions", posts: blueskyMentionPosts }),
+        }),
+        fetch("/api/reactions/fetch", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ blueskyReactions }),
+        }),
+      ]);
 
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        console.error("Mentions fetch error:", data.error);
-        if (res.status === 401) {
-          setFetchError("Your Mastodon session has expired. Please reconnect your account.");
-        }
-      } else {
-        const data = await res.json();
+      if (mentionsResult.status === "fulfilled" && mentionsResult.value.ok) {
+        const data = await mentionsResult.value.json();
         setPosts(data.posts);
         setNextCursor(data.nextCursor);
+      } else if (mentionsResult.status === "fulfilled") {
+        const status = mentionsResult.value.status;
+        if (status === 401) {
+          setFetchError("Your Mastodon session has expired. Please reconnect your account.");
+        } else {
+          console.error("Mentions fetch failed:", status);
+        }
+      } else {
+        console.error("Mentions fetch error:", mentionsResult.reason);
+      }
+
+      if (reactionsResult.status === "fulfilled" && reactionsResult.value.ok) {
+        const data = await reactionsResult.value.json();
+        setReactionGroups(data.reactionGroups || []);
+      } else {
+        console.error("Reactions fetch failed");
       }
     } catch (err) {
       console.error("Mentions fetch error:", err);
@@ -331,15 +427,15 @@ export default function MentionsPage() {
 
   const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refreshFeed, fetching);
 
-  // Cache mentions state
+  // Cache feed state
   useEffect(() => {
-    if (posts.length > 0) {
+    if (posts.length > 0 || reactionGroups.length > 0) {
       sessionStorage.setItem(
         "mentions_cache",
-        JSON.stringify({ posts, nextCursor })
+        JSON.stringify({ posts, reactionGroups, nextCursor })
       );
     }
-  }, [posts, nextCursor]);
+  }, [posts, reactionGroups, nextCursor]);
 
   // Save scroll position
   useEffect(() => {
@@ -362,9 +458,10 @@ export default function MentionsPage() {
     const cached = sessionStorage.getItem("mentions_cache");
     if (cached) {
       try {
-        const { posts: cachedPosts, nextCursor: cachedCursor } = JSON.parse(cached);
-        if (cachedPosts?.length > 0) {
-          setPosts(cachedPosts);
+        const { posts: cachedPosts, reactionGroups: cachedReactions, nextCursor: cachedCursor } = JSON.parse(cached);
+        if (cachedPosts?.length > 0 || cachedReactions?.length > 0) {
+          setPosts(cachedPosts || []);
+          setReactionGroups(cachedReactions || []);
           setNextCursor(cachedCursor);
           setLoading(false);
           const savedScroll = sessionStorage.getItem("mentions_scroll");
@@ -382,17 +479,17 @@ export default function MentionsPage() {
   }, [refreshFeed]);
 
   useLayoutEffect(() => {
-    if (pendingScrollRestore.current !== null && posts.length > 0) {
+    if (pendingScrollRestore.current !== null && feed.length > 0) {
       window.scrollTo(0, pendingScrollRestore.current);
       pendingScrollRestore.current = null;
     }
-  }, [posts]);
+  }, [feed]);
 
   async function loadMore() {
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
     try {
-      const data = await fetchMentions(nextCursor);
+      const data = await fetchMentionsCursor(nextCursor);
       setPosts((prev) => [...prev, ...data.posts]);
       setNextCursor(data.nextCursor);
     } catch (err) {
@@ -428,17 +525,25 @@ export default function MentionsPage() {
         </div>
       )}
 
-      {!loading && posts.length === 0 && (
+      {!loading && feed.length === 0 && (
         <p className="text-muted" style={{ textAlign: "center", padding: "40px 0" }}>
-          No mentions yet. Pull down to refresh.
+          No mentions or reactions yet. Pull down to refresh.
         </p>
       )}
 
       {!loading && (
         <div className="timeline-feed">
-          {posts.map((post) => (
-            <PostCard key={`${post.platform}-${post.id}`} post={post} blueskyAgent={agentRef.current} />
-          ))}
+          {feed.map((item) =>
+            item.kind === "reaction" ? (
+              <ReactionCard key={item.data.id} group={item.data} />
+            ) : (
+              <PostCard
+                key={`${item.data.platform}-${item.data.id}`}
+                post={item.data}
+                blueskyAgent={agentRef.current}
+              />
+            )
+          )}
 
           {nextCursor && (
             <div className="load-more">
