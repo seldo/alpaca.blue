@@ -572,6 +572,17 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
       )}
 
       {post.linkCard && (
+        /\.gif(\?|$)/i.test(post.linkCard.url) ? (
+          <a
+            href={post.linkCard.url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="post-gif"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img src={post.linkCard.url} alt={post.linkCard.title || ""} className="post-gif-img" />
+          </a>
+        ) : (
         <a
           href={post.linkCard.url}
           target="_blank"
@@ -590,6 +601,7 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
             <span className="post-link-card-url">{new URL(post.linkCard.url).hostname}</span>
           </div>
         </a>
+        )
       )}
 
       {post.quotedPost && post.quotedPost.authorHandle && (() => {

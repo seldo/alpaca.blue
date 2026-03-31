@@ -1415,6 +1415,20 @@ a.post-timestamp:hover {
   margin-top: 2px;
 }
 
+/* Inline GIF embed */
+.post-gif {
+  display: block;
+  margin-top: 8px;
+  margin-bottom: 8px;
+}
+
+.post-gif-img {
+  max-width: 100%;
+  max-height: 400px;
+  border-radius: 8px;
+  display: block;
+}
+
 /* Quoted / embedded post */
 .quoted-post {
   border: 1px solid var(--color-border);
