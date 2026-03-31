@@ -2,6 +2,7 @@
 
 import { useState, useRef } from "react";
 import type { Agent, BlobRef } from "@atproto/api";
+import { getBlueskyAgent } from "@/lib/bluesky-oauth";
 
 interface CreatePostProps {
   blueskyAgent: Agent | null;
@@ -127,6 +128,9 @@ export function CreatePost({ blueskyAgent, onClose, onPosted }: CreatePostProps)
     const results: string[] = [];
     const errors: string[] = [];
 
+    // Use the live cached agent in case it was restored after this component rendered
+    const agent = blueskyAgent ?? getBlueskyAgent();
+
     // When images are present, Mastodon goes first — Bluesky only posts if Mastodon succeeds
     if (images.length > 0) {
       let mastodonOk = false;
@@ -148,10 +152,10 @@ export function CreatePost({ blueskyAgent, onClose, onPosted }: CreatePostProps)
         errors.push("Mastodon");
       }
 
-      if (mastodonOk && blueskyAgent) {
+      if (mastodonOk && agent) {
         try {
-          const blueskyImages = await uploadToBluesky(blueskyAgent);
-          await blueskyAgent.post({
+          const blueskyImages = await uploadToBluesky(agent);
+          await agent.post({
             text: content,
             embed: { $type: "app.bsky.embed.images", images: blueskyImages },
           });
@@ -160,12 +164,15 @@ export function CreatePost({ blueskyAgent, onClose, onPosted }: CreatePostProps)
           console.error("Bluesky post error:", err);
           errors.push("Bluesky");
         }
+      } else if (mastodonOk && !agent) {
+        console.warn("Bluesky agent unavailable — image post skipped for Bluesky");
+        errors.push("Bluesky");
       }
     } else {
       // No images — post to both independently
-      if (blueskyAgent) {
+      if (agent) {
         try {
-          await blueskyAgent.post({ text: content });
+          await agent.post({ text: content });
           results.push("Bluesky");
         } catch (err) {
           console.error("Bluesky post error:", err);

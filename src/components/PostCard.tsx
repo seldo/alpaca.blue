@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import { getBlueskyAgent } from "@/lib/bluesky-oauth";
 
 function ImageModal({
   images,
@@ -249,7 +250,8 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
 
     try {
       if (post.platform === "bluesky") {
-        if (!blueskyAgent || !post.platformPostCid) {
+        const agent = blueskyAgent ?? getBlueskyAgent();
+        if (!agent || !post.platformPostCid) {
           console.warn("Cannot favorite: missing agent or CID");
           return;
         }
@@ -257,7 +259,7 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
           // We don't have the like URI stored, so we can't unfavorite Bluesky posts yet
           return;
         }
-        await blueskyAgent.like(post.platformPostId, post.platformPostCid);
+        await agent.like(post.platformPostId, post.platformPostCid);
         setFavorited(true);
         setLocalLikeCount((c) => c + 1);
       } else if (post.platform === "mastodon") {
@@ -296,12 +298,13 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
 
     try {
       if (post.platform === "bluesky") {
-        if (!blueskyAgent || !post.platformPostCid) {
+        const agent = blueskyAgent ?? getBlueskyAgent();
+        if (!agent || !post.platformPostCid) {
           console.warn("Cannot reply: missing agent or CID");
           return;
         }
         const ref = { uri: post.platformPostId, cid: post.platformPostCid };
-        await blueskyAgent.post({
+        await agent.post({
           text: replyText.trim(),
           reply: { root: ref, parent: ref },
         });
@@ -343,12 +346,13 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
 
     try {
       if (post.platform === "bluesky") {
-        if (!blueskyAgent || !post.platformPostCid) {
+        const agent = blueskyAgent ?? getBlueskyAgent();
+        if (!agent || !post.platformPostCid) {
           console.warn("Cannot repost: missing agent or CID");
           return;
         }
         if (reposted) return; // Can't undo Bluesky reposts without stored URI
-        await blueskyAgent.repost(post.platformPostId, post.platformPostCid);
+        await agent.repost(post.platformPostId, post.platformPostCid);
         setReposted(true);
         setLocalRepostCount((c) => c + 1);
       } else if (post.platform === "mastodon") {
@@ -388,11 +392,12 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
 
     try {
       if (post.platform === "bluesky") {
-        if (!blueskyAgent || !post.platformPostCid) {
+        const agent = blueskyAgent ?? getBlueskyAgent();
+        if (!agent || !post.platformPostCid) {
           console.warn("Cannot quote: missing agent or CID");
           return;
         }
-        await blueskyAgent.post({
+        await agent.post({
           text: quoteText.trim(),
           embed: {
             $type: "app.bsky.embed.record",
