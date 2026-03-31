@@ -8,6 +8,7 @@ import {
 } from "@/db/schema";
 import { eq, and, lt, desc, isNull, inArray, sql } from "drizzle-orm";
 import { createHash } from "crypto";
+import { redis, keys, TTL } from "@/lib/redis";
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -224,6 +225,10 @@ export async function storeBlueskyPosts(
     });
   }
 
+  if (rows.length > 0) {
+    await redis.del(keys.timelineCache(userId, "timeline")).catch(() => {});
+  }
+
   console.log(`[bluesky] DB ops (${postsData.length} posts, ${rows.length} rows): ${Date.now() - t0}ms`);
   return { stored: rows.length };
 }
@@ -233,6 +238,13 @@ export async function storeBlueskyPosts(
 export async function fetchAndStoreMastodonPosts(
   userId: number
 ): Promise<{ stored: number }> {
+  const debounceKey = keys.mastodonFetched(userId, "timeline");
+  const recentlyFetched = await redis.get(debounceKey).catch(() => null);
+  if (recentlyFetched) {
+    console.log(`[mastodon] timeline fetch skipped (debounced)`);
+    return { stored: 0 };
+  }
+
   const [account] = await db
     .select()
     .from(connectedAccounts)
@@ -328,6 +340,11 @@ export async function fetchAndStoreMastodonPosts(
     });
   }
 
+  await redis.set(debounceKey, "1", { ex: TTL.mastodonFetchDebounce }).catch(() => {});
+  if (rows.length > 0) {
+    await redis.del(keys.timelineCache(userId, "timeline")).catch(() => {});
+  }
+
   console.log(`[mastodon] DB ops (${statuses.length} statuses, ${rows.length} rows): ${Date.now() - tDb}ms`);
   return { stored: rows.length };
 }
@@ -344,6 +361,13 @@ interface MastodonNotification {
 export async function fetchAndStoreMastodonMentions(
   userId: number
 ): Promise<{ stored: number }> {
+  const debounceKey = keys.mastodonFetched(userId, "mentions");
+  const recentlyFetched = await redis.get(debounceKey).catch(() => null);
+  if (recentlyFetched) {
+    console.log(`[mastodon] mentions fetch skipped (debounced)`);
+    return { stored: 0 };
+  }
+
   const [account] = await db
     .select()
     .from(connectedAccounts)
@@ -469,6 +493,11 @@ export async function fetchAndStoreMastodonMentions(
         fetchedAt: new Date(),
       },
     });
+  }
+
+  await redis.set(debounceKey, "1", { ex: TTL.mastodonFetchDebounce }).catch(() => {});
+  if (rows.length > 0) {
+    await redis.del(keys.timelineCache(userId, "mentions")).catch(() => {});
   }
 
   console.log(`[mastodon] DB ops (${statuses.length} mentions, ${rows.length} rows): ${Date.now() - tDb}ms`);
@@ -722,6 +751,18 @@ export async function queryTimeline(
   userId: number,
   { type, cursor, limit = 50 }: { type?: string | null; cursor?: string | null; limit?: number }
 ): Promise<{ posts: TimelinePost[]; nextCursor: string | null }> {
+  const cacheType = type === "mentions" ? "mentions" : "timeline";
+
+  // Only cache the first page (no cursor)
+  if (!cursor) {
+    const cacheKey = keys.timelineCache(userId, cacheType);
+    const cached = await redis.get<{ posts: TimelinePost[]; nextCursor: string | null }>(cacheKey).catch(() => null);
+    if (cached) {
+      console.log(`[timeline] cache hit (${cacheType})`);
+      return cached;
+    }
+  }
+
   const fetchLimit = Math.ceil(limit * 1.5);
 
   const conditions = [eq(posts.userId, userId)];
@@ -791,5 +832,13 @@ export async function queryTimeline(
 
   const trimmed = result.slice(0, limit);
   const nextCursor = trimmed.length === limit ? trimmed[trimmed.length - 1].postedAt : null;
-  return { posts: trimmed, nextCursor };
+  const response = { posts: trimmed, nextCursor };
+
+  // Cache the first page result
+  if (!cursor) {
+    const cacheKey = keys.timelineCache(userId, cacheType);
+    await redis.set(cacheKey, response, { ex: TTL.timelineCache }).catch(() => {});
+  }
+
+  return response;
 }
