@@ -97,6 +97,7 @@ export const posts = mysqlTable(
     replyToId: varchar("reply_to_id", { length: 255 }),
     repostOfId: varchar("repost_of_id", { length: 255 }),
     quotedPost: json("quoted_post"),
+    linkCard: text("link_card"),
     likeCount: int("like_count").default(0),
     repostCount: int("repost_count").default(0),
     replyCount: int("reply_count").default(0),

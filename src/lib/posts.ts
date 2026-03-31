@@ -21,6 +21,13 @@ export interface QuotedPostData {
   postedAt?: string;
 }
 
+export interface LinkCardData {
+  url: string;
+  title: string;
+  description?: string;
+  thumb?: string;
+}
+
 export interface BlueskyPostData {
   uri: string;
   cid?: string;
@@ -39,6 +46,7 @@ export interface BlueskyPostData {
   repostedByHandle?: string;
   images?: Array<{ url: string; alt: string }>;
   quotedPost?: QuotedPostData;
+  linkCard?: LinkCardData;
   postType?: string; // "timeline" | "mention"
 }
 
@@ -189,6 +197,7 @@ export async function storeBlueskyPosts(
       replyToId: post.replyToUri || null,
       repostOfId: post.repostOfUri || null,
       quotedPost: post.quotedPost || null,
+      linkCard: post.linkCard ? JSON.stringify(post.linkCard) : null,
       likeCount: post.likeCount || 0,
       repostCount: post.repostCount || 0,
       replyCount: post.replyCount || 0,
@@ -206,6 +215,7 @@ export async function storeBlueskyPosts(
         platformPostCid: sql`values(${posts.platformPostCid})`,
         media: sql`values(${posts.media})`,
         quotedPost: sql`values(${posts.quotedPost})`,
+        linkCard: sql`values(${posts.linkCard})`,
         likeCount: sql`values(${posts.likeCount})`,
         repostCount: sql`values(${posts.repostCount})`,
         replyCount: sql`values(${posts.replyCount})`,
@@ -642,6 +652,7 @@ export async function queryPostsByIdentities(
       replyToId: post.replyToId,
       repostOfId: post.repostOfId,
       quotedPost: typeof post.quotedPost === "string" ? JSON.parse(post.quotedPost) : post.quotedPost,
+      linkCard: typeof post.linkCard === "string" ? JSON.parse(post.linkCard) : (post.linkCard ?? null),
       likeCount: post.likeCount,
       repostCount: post.repostCount,
       replyCount: post.replyCount,
@@ -671,6 +682,7 @@ export interface ProfilePost {
   replyToId: string | null;
   repostOfId: string | null;
   quotedPost: unknown;
+  linkCard: LinkCardData | null;
   likeCount: number | null;
   repostCount: number | null;
   replyCount: number | null;
@@ -695,6 +707,7 @@ export interface TimelinePost {
   replyToId: string | null;
   repostOfId: string | null;
   quotedPost: unknown;
+  linkCard: LinkCardData | null;
   likeCount: number | null;
   repostCount: number | null;
   replyCount: number | null;
@@ -709,27 +722,43 @@ export async function queryTimeline(
   userId: number,
   { type, cursor, limit = 50 }: { type?: string | null; cursor?: string | null; limit?: number }
 ): Promise<{ posts: TimelinePost[]; nextCursor: string | null }> {
-  const fetchLimit = Math.ceil(limit * 1.5);
+  // Fetch each platform separately to guarantee both are represented, then interleave.
+  // A single ORDER BY posted_at DESC LIMIT N query fails when one platform is far more
+  // active than the other — the less active platform never makes the cut.
+  const perPlatformLimit = limit;
 
-  const conditions = [eq(posts.userId, userId)];
+  const baseConditions = [eq(posts.userId, userId)];
   if (type === "mentions") {
-    conditions.push(eq(posts.postType, "mention"));
+    baseConditions.push(eq(posts.postType, "mention"));
   } else {
-    conditions.push(eq(posts.postType, "timeline"));
-    conditions.push(isNull(posts.replyToId));
+    baseConditions.push(eq(posts.postType, "timeline"));
+    baseConditions.push(isNull(posts.replyToId));
   }
   if (cursor) {
-    conditions.push(lt(posts.postedAt, new Date(cursor)));
+    baseConditions.push(lt(posts.postedAt, new Date(cursor)));
   }
 
-  const rows = await db
-    .select({ post: posts, identity: platformIdentities, person: persons })
-    .from(posts)
-    .leftJoin(platformIdentities, eq(posts.platformIdentityId, platformIdentities.id))
-    .leftJoin(persons, eq(platformIdentities.personId, persons.id))
-    .where(and(...conditions))
-    .orderBy(desc(posts.postedAt))
-    .limit(fetchLimit);
+  const [blueskyRows, mastodonRows] = await Promise.all([
+    db.select({ post: posts, identity: platformIdentities, person: persons })
+      .from(posts)
+      .leftJoin(platformIdentities, eq(posts.platformIdentityId, platformIdentities.id))
+      .leftJoin(persons, eq(platformIdentities.personId, persons.id))
+      .where(and(...baseConditions, eq(posts.platform, "bluesky")))
+      .orderBy(desc(posts.postedAt))
+      .limit(perPlatformLimit),
+    db.select({ post: posts, identity: platformIdentities, person: persons })
+      .from(posts)
+      .leftJoin(platformIdentities, eq(posts.platformIdentityId, platformIdentities.id))
+      .leftJoin(persons, eq(platformIdentities.personId, persons.id))
+      .where(and(...baseConditions, eq(posts.platform, "mastodon")))
+      .orderBy(desc(posts.postedAt))
+      .limit(perPlatformLimit),
+  ]);
+
+  // Merge both sets in chronological order (newest first)
+  const rows = [...blueskyRows, ...mastodonRows].sort(
+    (a, b) => b.post.postedAt.getTime() - a.post.postedAt.getTime()
+  );
 
   const seen = new Map<string, number>();
   const result: TimelinePost[] = [];
@@ -759,6 +788,7 @@ export async function queryTimeline(
       replyToId: row.post.replyToId,
       repostOfId: row.post.repostOfId,
       quotedPost: typeof row.post.quotedPost === "string" ? JSON.parse(row.post.quotedPost) : row.post.quotedPost,
+      linkCard: typeof row.post.linkCard === "string" ? JSON.parse(row.post.linkCard) : (row.post.linkCard ?? null),
       likeCount: row.post.likeCount,
       repostCount: row.post.repostCount,
       replyCount: row.post.replyCount,

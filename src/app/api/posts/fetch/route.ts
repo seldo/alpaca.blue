@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
       const { posts: blueskyPosts } = body;
       const limit = Math.min(parseInt(body.limit || "50"), 100);
 
-      await Promise.allSettled([
+      const [blueskyResult, mastodonResult] = await Promise.allSettled([
         blueskyPosts?.length > 0
           ? storeBlueskyPosts(blueskyPosts, userId)
           : Promise.resolve(),
@@ -29,6 +29,12 @@ export async function POST(request: NextRequest) {
           ? fetchAndStoreMastodonMentions(userId)
           : fetchAndStoreMastodonPosts(userId),
       ]);
+      if (blueskyResult.status === "rejected") {
+        console.error("[posts/fetch] Bluesky store error:", blueskyResult.reason);
+      }
+      if (mastodonResult.status === "rejected") {
+        console.error("[posts/fetch] Mastodon fetch error:", mastodonResult.reason);
+      }
 
       const result = await queryTimeline(userId, { type, limit });
       return NextResponse.json(result);

@@ -111,6 +111,7 @@ interface PostData {
   alsoPostedOn?: Array<{ platform: string; postUrl: string | null }>;
   replyToAuthor?: { handle: string; dbPostId: number; postUrl: string | null } | null;
   replyToMe?: boolean;
+  linkCard?: { url: string; title: string; description?: string; thumb?: string } | null;
 }
 
 interface BlueskyAgentLike {
@@ -563,6 +564,27 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
             />
           ))}
         </div>
+      )}
+
+      {post.linkCard && (
+        <a
+          href={post.linkCard.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="post-link-card"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {post.linkCard.thumb && (
+            <img src={post.linkCard.thumb} alt="" className="post-link-card-thumb" />
+          )}
+          <div className="post-link-card-text">
+            <span className="post-link-card-title">{post.linkCard.title}</span>
+            {post.linkCard.description && (
+              <span className="post-link-card-description">{post.linkCard.description}</span>
+            )}
+            <span className="post-link-card-url">{new URL(post.linkCard.url).hostname}</span>
+          </div>
+        </a>
       )}
 
       {post.quotedPost && post.quotedPost.authorHandle && (() => {

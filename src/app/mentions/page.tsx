@@ -48,6 +48,7 @@ interface PostData {
   } | null;
   alsoPostedOn: Array<{ platform: string; postUrl: string | null }>;
   replyToMe?: boolean;
+  linkCard?: { url: string; title: string; description?: string; thumb?: string } | null;
 }
 
 interface BlueskyFacetFeature {

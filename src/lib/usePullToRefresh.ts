@@ -23,21 +23,32 @@ export function usePullToRefresh(onRefresh: () => Promise<void>, disabled = fals
   const wheelAccumulated = useRef(0);
   const wheelResetTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
+  // Use refs for values read inside event handlers to avoid stale closures
+  // and prevent the effect from re-running (and re-registering listeners) mid-refresh.
+  const refreshingRef = useRef(false);
+  const disabledRef = useRef(disabled);
+  const onRefreshRef = useRef(onRefresh);
+  useEffect(() => { disabledRef.current = disabled; }, [disabled]);
+  useEffect(() => { onRefreshRef.current = onRefresh; }, [onRefresh]);
+
   useEffect(() => {
     // ── shared trigger ────────────────────────────────────────
     const trigger = async () => {
+      if (refreshingRef.current) return;
+      refreshingRef.current = true;
       setRefreshing(true);
       setPullDistance(0);
       try {
-        await onRefresh();
+        await onRefreshRef.current();
       } finally {
+        refreshingRef.current = false;
         setRefreshing(false);
       }
     };
 
     // ── touch ─────────────────────────────────────────────────
     const onTouchStart = (e: TouchEvent) => {
-      if (disabled || refreshing || window.scrollY > 0) return;
+      if (disabledRef.current || refreshingRef.current || window.scrollY > 0) return;
       touchStartY.current = e.touches[0].clientY;
       touchActive.current = true;
     };
@@ -67,7 +78,7 @@ export function usePullToRefresh(onRefresh: () => Promise<void>, disabled = fals
 
     // ── wheel (desktop overscroll) ────────────────────────────
     const onWheel = (e: WheelEvent) => {
-      if (disabled || refreshing) return;
+      if (disabledRef.current || refreshingRef.current) return;
 
       // Only care about upward scroll at the very top of the page
       if (window.scrollY > 0 || e.deltaY >= 0) {
@@ -110,7 +121,8 @@ export function usePullToRefresh(onRefresh: () => Promise<void>, disabled = fals
       window.removeEventListener("wheel", onWheel);
       if (wheelResetTimer.current) clearTimeout(wheelResetTimer.current);
     };
-  }, [onRefresh, disabled, refreshing]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   return { pullDistance, refreshing };
 }

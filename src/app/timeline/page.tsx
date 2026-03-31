@@ -49,6 +49,7 @@ interface PostData {
     displayName: string | null;
   } | null;
   alsoPostedOn: Array<{ platform: string; postUrl: string | null }>;
+  linkCard: { url: string; title: string; description?: string; thumb?: string } | null;
 }
 
 interface BlueskyFacetFeature {
@@ -169,10 +170,7 @@ function extractBlueskyImages(embed: any): Array<{ url: string; alt: string }> {
     images.push({ url: embed.media.thumbnail, alt: "Video thumbnail" });
   }
 
-  // app.bsky.embed.external#view — link card with thumbnail
-  if (embed.external?.thumb) {
-    images.push({ url: embed.external.thumb, alt: embed.external.title || "" });
-  }
+  // app.bsky.embed.external#view — link card (thumbnail handled separately via extractLinkCard)
 
   return images;
 }
@@ -228,6 +226,19 @@ function extractQuotedPost(embed: any): {
   }
 
   return quoted;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractLinkCard(embed: any): { url: string; title: string; description?: string; thumb?: string } | undefined {
+  if (!embed) return undefined;
+  const ext = embed.external ?? embed.media?.external;
+  if (!ext?.uri) return undefined;
+  return {
+    url: ext.uri,
+    title: ext.title || ext.uri,
+    description: ext.description || undefined,
+    thumb: ext.thumb || undefined,
+  };
 }
 
 function isAuthError(err: unknown): boolean {
@@ -319,6 +330,7 @@ export default function TimelinePage() {
       repostOfUri: item.reason ? post.uri : undefined,
       images: extractBlueskyImages(post.embed),
       quotedPost: extractQuotedPost(post.embed),
+      linkCard: extractLinkCard(post.embed),
       postType,
     };
   }

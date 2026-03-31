@@ -46,6 +46,7 @@ interface PostData {
     displayName: string | null;
   } | null;
   alsoPostedOn: Array<{ platform: string; postUrl: string | null }>;
+  linkCard?: { url: string; title: string; description?: string; thumb?: string } | null;
 }
 
 export default function PostPage() {
