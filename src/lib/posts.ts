@@ -722,43 +722,27 @@ export async function queryTimeline(
   userId: number,
   { type, cursor, limit = 50 }: { type?: string | null; cursor?: string | null; limit?: number }
 ): Promise<{ posts: TimelinePost[]; nextCursor: string | null }> {
-  // Fetch each platform separately to guarantee both are represented, then interleave.
-  // A single ORDER BY posted_at DESC LIMIT N query fails when one platform is far more
-  // active than the other — the less active platform never makes the cut.
-  const perPlatformLimit = limit;
+  const fetchLimit = Math.ceil(limit * 1.5);
 
-  const baseConditions = [eq(posts.userId, userId)];
+  const conditions = [eq(posts.userId, userId)];
   if (type === "mentions") {
-    baseConditions.push(eq(posts.postType, "mention"));
+    conditions.push(eq(posts.postType, "mention"));
   } else {
-    baseConditions.push(eq(posts.postType, "timeline"));
-    baseConditions.push(isNull(posts.replyToId));
+    conditions.push(eq(posts.postType, "timeline"));
+    conditions.push(isNull(posts.replyToId));
   }
   if (cursor) {
-    baseConditions.push(lt(posts.postedAt, new Date(cursor)));
+    conditions.push(lt(posts.postedAt, new Date(cursor)));
   }
 
-  const [blueskyRows, mastodonRows] = await Promise.all([
-    db.select({ post: posts, identity: platformIdentities, person: persons })
-      .from(posts)
-      .leftJoin(platformIdentities, eq(posts.platformIdentityId, platformIdentities.id))
-      .leftJoin(persons, eq(platformIdentities.personId, persons.id))
-      .where(and(...baseConditions, eq(posts.platform, "bluesky")))
-      .orderBy(desc(posts.postedAt))
-      .limit(perPlatformLimit),
-    db.select({ post: posts, identity: platformIdentities, person: persons })
-      .from(posts)
-      .leftJoin(platformIdentities, eq(posts.platformIdentityId, platformIdentities.id))
-      .leftJoin(persons, eq(platformIdentities.personId, persons.id))
-      .where(and(...baseConditions, eq(posts.platform, "mastodon")))
-      .orderBy(desc(posts.postedAt))
-      .limit(perPlatformLimit),
-  ]);
-
-  // Merge both sets in chronological order (newest first)
-  const rows = [...blueskyRows, ...mastodonRows].sort(
-    (a, b) => b.post.postedAt.getTime() - a.post.postedAt.getTime()
-  );
+  const rows = await db
+    .select({ post: posts, identity: platformIdentities, person: persons })
+    .from(posts)
+    .leftJoin(platformIdentities, eq(posts.platformIdentityId, platformIdentities.id))
+    .leftJoin(persons, eq(platformIdentities.personId, persons.id))
+    .where(and(...conditions))
+    .orderBy(desc(posts.postedAt))
+    .limit(fetchLimit);
 
   const seen = new Map<string, number>();
   const result: TimelinePost[] = [];
