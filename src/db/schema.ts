@@ -83,7 +83,8 @@ export const posts = mysqlTable(
     userId: int("user_id")
       .references(() => users.id, { onDelete: "cascade" })
       .notNull(),
-    postType: varchar("post_type", { length: 20 }).notNull().default("timeline"), // "timeline" | "mention"
+    isTimeline: boolean("is_timeline").notNull().default(false),
+    isMention: boolean("is_mention").notNull().default(false),
     platformIdentityId: int("platform_identity_id")
       .references(() => platformIdentities.id, { onDelete: "cascade" })
       .notNull(),
@@ -107,11 +108,10 @@ export const posts = mysqlTable(
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => [
-    uniqueIndex("platform_post_user_type_idx").on(
+    uniqueIndex("platform_post_user_idx").on(
       table.userId,
       table.platform,
       table.platformPostId,
-      table.postType
     ),
     index("identity_posted_idx").on(
       table.platformIdentityId,
@@ -119,7 +119,8 @@ export const posts = mysqlTable(
     ),
     index("dedupe_hash_idx").on(table.dedupeHash),
     index("posted_at_idx").on(table.postedAt),
-    index("user_type_posted_idx").on(table.userId, table.postType, table.postedAt),
+    index("user_timeline_posted_idx").on(table.userId, table.isTimeline, table.postedAt),
+    index("user_mention_posted_idx").on(table.userId, table.isMention, table.postedAt),
   ]
 );
 

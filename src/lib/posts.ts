@@ -48,7 +48,7 @@ export interface BlueskyPostData {
   images?: Array<{ url: string; alt: string }>;
   quotedPost?: QuotedPostData;
   linkCard?: LinkCardData;
-  postType?: string; // "timeline" | "mention"
+  isMention?: boolean;
 }
 
 interface MastodonStatus {
@@ -144,7 +144,7 @@ export async function storeBlueskyPosts(
 
   // Insert new mention identities (people who mentioned us but aren't followed)
   const missingMentions = postsData.filter(
-    (p) => p.postType === "mention" && !identityMap.has(p.authorDid)
+    (p) => p.isMention && !identityMap.has(p.authorDid)
   );
   if (missingMentions.length > 0) {
     const newRows = missingMentions.map((post) => ({
@@ -187,7 +187,8 @@ export async function storeBlueskyPosts(
     const media = post.images?.map((img) => ({ type: "image", url: img.url, alt: img.alt }));
     rows.push({
       userId,
-      postType: (post.postType || "timeline") as "timeline" | "mention",
+      isTimeline: !post.isMention,
+      isMention: !!post.isMention,
       platformIdentityId: identity.id,
       platform: "bluesky" as const,
       platformPostId: post.uri,
@@ -207,10 +208,12 @@ export async function storeBlueskyPosts(
     });
   }
 
-  // Single batch upsert
+  // Single batch upsert — OR the boolean flags so a mention upsert doesn't clear isTimeline
   if (rows.length > 0) {
     await db.insert(posts).values(rows).onDuplicateKeyUpdate({
       set: {
+        isTimeline: sql`greatest(${posts.isTimeline}, values(${posts.isTimeline}))`,
+        isMention: sql`greatest(${posts.isMention}, values(${posts.isMention}))`,
         content: sql`values(${posts.content})`,
         contentHtml: sql`values(${posts.contentHtml})`,
         platformPostCid: sql`values(${posts.platformPostCid})`,
@@ -308,6 +311,8 @@ export async function fetchAndStoreMastodonPosts(
 
     rows.push({
       userId,
+      isTimeline: true,
+      isMention: false,
       platformIdentityId: identity.id,
       platform: "mastodon" as const,
       platformPostId: actual.id,
@@ -329,6 +334,7 @@ export async function fetchAndStoreMastodonPosts(
   if (rows.length > 0) {
     await db.insert(posts).values(rows).onDuplicateKeyUpdate({
       set: {
+        isTimeline: true,
         content: sql`values(${posts.content})`,
         contentHtml: sql`values(${posts.contentHtml})`,
         postUrl: sql`values(${posts.postUrl})`,
@@ -462,7 +468,8 @@ export async function fetchAndStoreMastodonMentions(
 
     rows.push({
       userId,
-      postType: "mention" as const,
+      isTimeline: false,
+      isMention: true,
       platformIdentityId: identity.id,
       platform: "mastodon" as const,
       platformPostId: status.id,
@@ -483,6 +490,7 @@ export async function fetchAndStoreMastodonMentions(
   if (rows.length > 0) {
     await db.insert(posts).values(rows).onDuplicateKeyUpdate({
       set: {
+        isMention: true,
         content: sql`values(${posts.content})`,
         contentHtml: sql`values(${posts.contentHtml})`,
         postUrl: sql`values(${posts.postUrl})`,
@@ -555,6 +563,8 @@ export async function fetchAndStoreOwnMastodonPosts(
     const media = actual.media_attachments.map((m) => ({ type: m.type, url: m.url, alt: m.description || "" }));
     return {
       userId,
+      isTimeline: true,
+      isMention: false,
       platformIdentityId: identity.id,
       platform: "mastodon" as const,
       platformPostId: actual.id,
@@ -877,9 +887,9 @@ export async function queryTimeline(
 
   const conditions = [eq(posts.userId, userId)];
   if (type === "mentions") {
-    conditions.push(eq(posts.postType, "mention"));
+    conditions.push(eq(posts.isMention, true));
   } else {
-    conditions.push(eq(posts.postType, "timeline"));
+    conditions.push(eq(posts.isTimeline, true));
     conditions.push(isNull(posts.replyToId));
   }
   if (cursor) {

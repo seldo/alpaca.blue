@@ -249,7 +249,7 @@ export default function MentionsPage() {
       let blueskyMentionPosts: {
         uri: string; cid: string; authorDid: string; authorHandle: string;
         text: string; contentHtml: string; createdAt: string;
-        replyToUri?: string; postType: string;
+        replyToUri?: string; isMention: boolean;
         images?: Array<{ url: string; alt: string }>;
         quotedPost?: ReturnType<typeof extractQuotedPost>;
       }[] = [];
@@ -314,7 +314,7 @@ export default function MentionsPage() {
               contentHtml,
               createdAt: n.indexedAt,
               replyToUri: record?.reply?.parent?.uri || undefined,
-              postType: "mention",
+              isMention: true,
               images: extractBlueskyImages(hydrated?.embed),
               quotedPost: extractQuotedPost(hydrated?.embed),
             };

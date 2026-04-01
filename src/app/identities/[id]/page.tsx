@@ -2,11 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import {
-  getBlueskyAgent,
-  setBlueskyAgent,
-  restoreBlueskySession,
-} from "@/lib/bluesky-oauth";
+import { getBlueskyAgent, setBlueskyAgent, restoreBlueskySession } from "@/lib/bluesky-oauth";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
 import { usePullToRefresh } from "@/lib/usePullToRefresh";
@@ -17,6 +13,8 @@ interface Identity {
   handle: string;
   displayName: string | null;
   avatarUrl: string | null;
+  profileUrl: string | null;
+  personId: number | null;
 }
 
 interface PostData {
@@ -55,13 +53,12 @@ interface PostData {
   alsoPostedOn: Array<{ platform: string; postUrl: string | null }>;
 }
 
-export default function PersonPage() {
+export default function IdentityPage() {
   const params = useParams();
   const router = useRouter();
-  const personId = params.id as string;
+  const identityId = params.id as string;
 
-  const [personName, setPersonName] = useState<string>("");
-  const [identities, setIdentities] = useState<Identity[]>([]);
+  const [identity, setIdentity] = useState<Identity | null>(null);
   const [posts, setPosts] = useState<PostData[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -71,8 +68,8 @@ export default function PersonPage() {
   const isFetchingRef = useRef(false);
   const pendingScrollRestore = useRef<number | null>(null);
 
-  const cacheKey = `person_cache_${personId}`;
-  const scrollKey = `person_scroll_${personId}`;
+  const cacheKey = `identity_cache_${identityId}`;
+  const scrollKey = `identity_scroll_${identityId}`;
 
   useEffect(() => {
     const existing = getBlueskyAgent();
@@ -81,11 +78,8 @@ export default function PersonPage() {
       return;
     }
     restoreBlueskySession().then((agent) => {
-      if (agent) {
-        agentRef.current = agent;
-      } else {
-        setBlueskyAgent(null);
-      }
+      if (agent) agentRef.current = agent;
+      else setBlueskyAgent(null);
     }).catch(() => {});
   }, []);
 
@@ -97,40 +91,27 @@ export default function PersonPage() {
     setFetching(true);
 
     try {
-      const [identRes, postsRes] = await Promise.all([
-        fetch("/api/graph/identities"),
-        fetch(`/api/persons/${personId}/posts?limit=50`),
-      ]);
-
-      const identData = await identRes.json();
-      const person = identData.persons?.find(
-        (p: { id: number }) => p.id === parseInt(personId)
-      );
-      if (person) {
-        setPersonName(person.displayName || "Unknown");
-        setIdentities(person.identities || []);
-      }
-
-      const postsData = await postsRes.json();
-      if (postsData.posts) {
-        setPosts(postsData.posts);
-        setNextCursor(postsData.nextCursor);
-      }
+      const res = await fetch(`/api/identities/${identityId}/posts?limit=50`);
+      if (!res.ok) throw new Error("Failed to fetch");
+      const data = await res.json();
+      setIdentity(data.identity);
+      setPosts(data.posts || []);
+      setNextCursor(data.nextCursor);
     } catch (err) {
-      console.error("Failed to load person:", err);
+      console.error("Failed to load identity:", err);
     } finally {
       setFetching(false);
       setLoading(false);
       isFetchingRef.current = false;
     }
-  }, [personId, cacheKey, scrollKey]);
+  }, [identityId, cacheKey, scrollKey]);
 
   // Cache state
   useEffect(() => {
-    if (posts.length > 0 || identities.length > 0) {
-      sessionStorage.setItem(cacheKey, JSON.stringify({ personName, identities, posts, nextCursor }));
+    if (identity || posts.length > 0) {
+      sessionStorage.setItem(cacheKey, JSON.stringify({ identity, posts, nextCursor }));
     }
-  }, [personName, identities, posts, nextCursor, cacheKey]);
+  }, [identity, posts, nextCursor, cacheKey]);
 
   // Save scroll position
   useEffect(() => {
@@ -153,10 +134,9 @@ export default function PersonPage() {
     const cached = sessionStorage.getItem(cacheKey);
     if (cached) {
       try {
-        const { personName: n, identities: ids, posts: p, nextCursor: c } = JSON.parse(cached);
-        if (p?.length > 0 || ids?.length > 0) {
-          setPersonName(n || "");
-          setIdentities(ids || []);
+        const { identity: i, posts: p, nextCursor: c } = JSON.parse(cached);
+        if (i || p?.length > 0) {
+          setIdentity(i);
           setPosts(p || []);
           setNextCursor(c);
           setLoading(false);
@@ -184,9 +164,7 @@ export default function PersonPage() {
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
     try {
-      const res = await fetch(
-        `/api/persons/${personId}/posts?limit=50&cursor=${nextCursor}`
-      );
+      const res = await fetch(`/api/identities/${identityId}/posts?limit=50&cursor=${nextCursor}`);
       const data = await res.json();
       setPosts((prev) => [...prev, ...data.posts]);
       setNextCursor(data.nextCursor);
@@ -196,6 +174,8 @@ export default function PersonPage() {
       setLoadingMore(false);
     }
   }
+
+  const displayName = identity?.displayName || identity?.handle || "Profile";
 
   return (
     <AppLayout>
@@ -219,30 +199,29 @@ export default function PersonPage() {
         </div>
       )}
 
-      {!loading && (
+      {!loading && identity && (
         <>
-          {identities.length > 0 && (
-            <section className="section">
-              <h2 className="section-title">Accounts</h2>
-              <div className="person-identities-list">
-                {identities.map((i) => (
-                  <div key={i.id} className="person-identity-row">
-                    {i.avatarUrl && (
-                      <img
-                        src={i.avatarUrl}
-                        alt=""
-                        className="person-identity-avatar"
-                      />
-                    )}
-                    <span className={`platform-badge ${i.platform}`}>
-                      {i.platform === "bluesky" ? "B" : "M"}
-                    </span>
-                    <span className="person-identity-handle">{i.handle}</span>
-                  </div>
-                ))}
+          <section className="section">
+            <div className="person-identity-row" style={{ gap: "12px", padding: "8px 0" }}>
+              {identity.avatarUrl && (
+                <img src={identity.avatarUrl} alt="" className="person-identity-avatar" style={{ width: 48, height: 48 }} />
+              )}
+              <div>
+                <div style={{ fontWeight: 600, fontSize: "1.1rem" }}>{displayName}</div>
+                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
+                  <span className={`platform-badge ${identity.platform}`}>
+                    {identity.platform === "bluesky" ? "B" : "M"}
+                  </span>
+                  <span className="text-muted" style={{ fontSize: "0.9rem" }}>{identity.handle}</span>
+                </div>
               </div>
-            </section>
-          )}
+              {identity.personId && (
+                <a href={`/persons/${identity.personId}`} className="btn btn-outline" style={{ marginLeft: "auto", fontSize: "0.85rem" }}>
+                  View merged profile
+                </a>
+              )}
+            </div>
+          </section>
 
           <section className="section">
             <h2 className="section-title">
@@ -250,7 +229,7 @@ export default function PersonPage() {
             </h2>
 
             {posts.length === 0 && (
-              <p className="text-muted">No posts fetched yet for this person.</p>
+              <p className="text-muted">No posts fetched yet.</p>
             )}
 
             <div className="timeline-feed">

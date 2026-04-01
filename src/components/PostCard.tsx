@@ -464,12 +464,18 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
     }
   }
 
+  const avatarLink = post.person
+    ? `/persons/${post.person.id}`
+    : author
+    ? `/identities/${author.id}`
+    : null;
+
   return (
     <article className="post-card post-card-clickable" onClick={handleCardClick}>
       <div className="post-author">
         {author?.avatarUrl && (
-          profileUrl ? (
-            <a href={profileUrl} target="_blank" rel="noopener noreferrer">
+          avatarLink ? (
+            <a href={avatarLink} onClick={(e) => e.stopPropagation()}>
               <img src={author.avatarUrl} alt="" className="post-avatar" />
             </a>
           ) : (

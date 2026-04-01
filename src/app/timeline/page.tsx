@@ -298,7 +298,7 @@ export default function TimelinePage() {
   // Map a Bluesky post item to our BlueskyPostData shape
   function mapBlueskyPost(
     item: { post: Record<string, unknown>; reason?: unknown },
-    postType?: string
+    isMention?: boolean
   ) {
     const post = item.post as {
       uri: string;
@@ -331,7 +331,7 @@ export default function TimelinePage() {
       images: extractBlueskyImages(post.embed),
       quotedPost: extractQuotedPost(post.embed),
       linkCard: extractLinkCard(post.embed),
-      postType,
+      isMention: !!isMention,
     };
   }
 
