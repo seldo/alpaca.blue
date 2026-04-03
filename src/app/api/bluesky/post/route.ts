@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { RichText } from "@atproto/api";
 import { getServerBlueskyAgent } from "@/lib/bluesky-server";
 import { requireSession, unauthorizedResponse } from "@/lib/session";
 
@@ -31,8 +32,11 @@ export async function POST(request: NextRequest) {
   const agent = await getServerBlueskyAgent(session.userId!);
   if (!agent) return NextResponse.json({ error: "Bluesky session not found" }, { status: 401 });
 
+  const rt = new RichText({ text: text.trim() });
+  await rt.detectFacets(agent);
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const postParams: Record<string, any> = { text: text.trim() };
+  const postParams: Record<string, any> = { text: rt.text, facets: rt.facets };
 
   if (replyTo) {
     const parentRef = { uri: replyTo.uri, cid: replyTo.cid };
