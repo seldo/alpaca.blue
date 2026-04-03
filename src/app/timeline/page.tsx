@@ -58,6 +58,7 @@ export default function TimelinePage() {
   const [composeOpen, setComposeOpen] = useState(false);
   const pendingScrollRestore = useRef<number | null>(null);
   const isFetchingRef = useRef(false);
+  const fetchControllerRef = useRef<AbortController | null>(null);
 
   const fetchTimeline = useCallback(async (cursor?: string) => {
     const params = new URLSearchParams({ limit: "50" });
@@ -77,6 +78,7 @@ export default function TimelinePage() {
     setFetchError(null);
 
     const controller = new AbortController();
+    fetchControllerRef.current = controller;
     const timeout = setTimeout(() => controller.abort(), 15000);
 
     try {
@@ -101,6 +103,18 @@ export default function TimelinePage() {
       setLoading(false);
       isFetchingRef.current = false;
     }
+  }, []);
+
+  // On mobile PWA, setTimeout is suspended when backgrounded, so the 15s abort
+  // never fires. Abort any stuck fetch immediately when the app returns to foreground.
+  useEffect(() => {
+    function handleVisibilityChange() {
+      if (!document.hidden && isFetchingRef.current) {
+        fetchControllerRef.current?.abort();
+      }
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, []);
 
   const heartbeat = useCallback(() => {

@@ -58,6 +58,7 @@ export default function MentionsPage() {
   const [loadingMore, setLoadingMore] = useState(false);
   const pendingScrollRestore = useRef<number | null>(null);
   const isFetchingRef = useRef(false);
+  const fetchControllerRef = useRef<AbortController | null>(null);
 
   const feed = useMemo(() => {
     type FeedItem = { sortKey: string; kind: "post"; data: PostData } | { sortKey: string; kind: "reaction"; data: ReactionGroup };
@@ -86,6 +87,7 @@ export default function MentionsPage() {
     setFetchError(null);
 
     const controller = new AbortController();
+    fetchControllerRef.current = controller;
     const timeout = setTimeout(() => controller.abort(), 15000);
 
     try {
@@ -116,6 +118,16 @@ export default function MentionsPage() {
       setLoading(false);
       isFetchingRef.current = false;
     }
+  }, []);
+
+  useEffect(() => {
+    function handleVisibilityChange() {
+      if (!document.hidden && isFetchingRef.current) {
+        fetchControllerRef.current?.abort();
+      }
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, []);
 
   const heartbeat = useCallback(() => {
