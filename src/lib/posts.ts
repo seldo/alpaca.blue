@@ -846,7 +846,7 @@ export interface ProfilePost {
   postedAt: string;
   author: { id: number; handle: string; displayName: string | null; avatarUrl: string | null; platform: string; profileUrl: string | null } | null;
   person: null;
-  alsoPostedOn: Array<{ platform: string; postUrl: string | null }>;
+  alsoPostedOn: Array<{ platform: string; postUrl: string | null; platformPostId: string; platformPostCid: string | null; threadRootId: string | null; threadRootCid: string | null }>;
   replyToAuthor: { handle: string; dbPostId: number; postUrl: string | null } | null;
 }
 
@@ -873,7 +873,7 @@ export interface TimelinePost {
   postedAt: string;
   author: { id: number; handle: string; displayName: string | null; avatarUrl: string | null; platform: string; profileUrl: string | null } | null;
   person: { id: number; displayName: string | null } | null;
-  alsoPostedOn: Array<{ platform: string; postUrl: string | null }>;
+  alsoPostedOn: Array<{ platform: string; postUrl: string | null; platformPostId: string; platformPostCid: string | null; threadRootId: string | null; threadRootCid: string | null }>;
   replyToMe?: boolean;
 }
 
@@ -926,7 +926,14 @@ export async function queryTimeline(
         (p) => p.platform === row.post.platform
       );
       if (!alreadyListed) {
-        result[existingIdx].alsoPostedOn.push({ platform: row.post.platform, postUrl: row.post.postUrl || null });
+        result[existingIdx].alsoPostedOn.push({
+          platform: row.post.platform,
+          postUrl: row.post.postUrl || null,
+          platformPostId: row.post.platformPostId,
+          platformPostCid: row.post.platformPostCid || null,
+          threadRootId: row.post.threadRootId || null,
+          threadRootCid: row.post.threadRootCid || null,
+        });
       }
       continue;
     }

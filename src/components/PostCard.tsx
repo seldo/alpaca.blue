@@ -110,7 +110,7 @@ interface PostData {
     id: number;
     displayName: string | null;
   } | null;
-  alsoPostedOn?: Array<{ platform: string; postUrl: string | null }>;
+  alsoPostedOn?: Array<{ platform: string; postUrl: string | null; platformPostId: string; platformPostCid: string | null; threadRootId: string | null; threadRootCid: string | null }>;
   replyToAuthor?: { handle: string; dbPostId: number; postUrl: string | null } | null;
   replyToMe?: boolean;
   linkCard?: { url: string; title: string; description?: string; thumb?: string } | null;
@@ -292,45 +292,63 @@ export function PostCard({ post }: { post: PostData }) {
     setReplying(true);
 
     try {
+      const text = replyText.trim();
+      const crossPost = post.alsoPostedOn?.find((p) => p.platform !== post.platform);
+      const fetches: Promise<Response>[] = [];
+
       if (post.platform === "bluesky") {
-        if (!post.platformPostCid) {
-          console.warn("Cannot reply: missing CID");
-          return;
-        }
-        const res = await fetch("/api/bluesky/post", {
+        if (!post.platformPostCid) { console.warn("Cannot reply: missing CID"); return; }
+        fetches.push(fetch("/api/bluesky/post", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            text: replyText.trim(),
+            text,
             replyTo: { uri: post.platformPostId, cid: post.platformPostCid },
             replyRoot: post.threadRootId && post.threadRootCid
               ? { uri: post.threadRootId, cid: post.threadRootCid }
               : { uri: post.platformPostId, cid: post.platformPostCid },
           }),
-        });
-        if (res.ok) {
-          setReplySuccess(true);
-          setReplyText("");
-          setLocalReplyCount((c) => c + 1);
-        } else {
-          const data = await res.json();
-          console.error("Reply failed:", data.error);
+        }));
+        if (crossPost?.platform === "mastodon") {
+          fetches.push(fetch("/api/mastodon/reply", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ statusId: crossPost.platformPostId, content: text }),
+          }));
         }
       } else if (post.platform === "mastodon") {
-        const res = await fetch(`/api/posts/${post.id}/reply`, {
+        fetches.push(fetch(`/api/posts/${post.id}/reply`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content: replyText.trim() }),
-        });
-        if (res.ok) {
-          setReplySuccess(true);
-          setReplyText("");
-          setLocalReplyCount((c) => c + 1);
-        } else {
-          const data = await res.json();
-          console.error("Reply failed:", data.error);
+          body: JSON.stringify({ content: text }),
+        }));
+        if (crossPost?.platform === "bluesky" && crossPost.platformPostCid) {
+          fetches.push(fetch("/api/bluesky/post", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              text,
+              replyTo: { uri: crossPost.platformPostId, cid: crossPost.platformPostCid },
+              replyRoot: crossPost.threadRootId && crossPost.threadRootCid
+                ? { uri: crossPost.threadRootId, cid: crossPost.threadRootCid }
+                : { uri: crossPost.platformPostId, cid: crossPost.platformPostCid },
+            }),
+          }));
         }
       }
+
+      const results = await Promise.allSettled(fetches);
+      const anyOk = results.some((r) => r.status === "fulfilled" && r.value.ok);
+      if (anyOk) {
+        setReplySuccess(true);
+        setReplyText("");
+        setLocalReplyCount((c) => c + 1);
+      } else {
+        console.error("All replies failed");
+      }
+      results.forEach((r, i) => {
+        if (r.status === "rejected") console.error(`Reply[${i}] error:`, r.reason);
+      });
     } catch (err) {
       console.error("Reply error:", err);
     } finally {

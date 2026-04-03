@@ -43,7 +43,7 @@ interface PostData {
     id: number;
     displayName: string | null;
   } | null;
-  alsoPostedOn: Array<{ platform: string; postUrl: string | null }>;
+  alsoPostedOn: Array<{ platform: string; postUrl: string | null; platformPostId: string; platformPostCid: string | null; threadRootId: string | null; threadRootCid: string | null }>;
   linkCard: { url: string; title: string; description?: string; thumb?: string } | null;
 }
 

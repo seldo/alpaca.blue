@@ -39,12 +39,16 @@ export async function GET(
     }
 
     // Find cross-posts via dedupeHash
-    const alsoPostedOn: Array<{ platform: string; postUrl: string | null }> = [];
+    const alsoPostedOn: Array<{ platform: string; postUrl: string | null; platformPostId: string; platformPostCid: string | null; threadRootId: string | null; threadRootCid: string | null }> = [];
     if (row.post.dedupeHash) {
       const dupes = await db
         .select({
           platform: posts.platform,
           postUrl: posts.postUrl,
+          platformPostId: posts.platformPostId,
+          platformPostCid: posts.platformPostCid,
+          threadRootId: posts.threadRootId,
+          threadRootCid: posts.threadRootCid,
         })
         .from(posts)
         .where(
@@ -58,6 +62,10 @@ export async function GET(
           alsoPostedOn.push({
             platform: dupe.platform,
             postUrl: dupe.postUrl,
+            platformPostId: dupe.platformPostId,
+            platformPostCid: dupe.platformPostCid || null,
+            threadRootId: dupe.threadRootId || null,
+            threadRootCid: dupe.threadRootCid || null,
           });
         }
       }

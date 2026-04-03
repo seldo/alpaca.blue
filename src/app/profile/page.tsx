@@ -37,7 +37,7 @@ interface PostData {
   postedAt: string;
   author: { id: number; handle: string; displayName: string | null; avatarUrl: string | null; platform: string; profileUrl: string | null } | null;
   person: { id: number; displayName: string | null } | null;
-  alsoPostedOn: Array<{ platform: string; postUrl: string | null }>;
+  alsoPostedOn: Array<{ platform: string; postUrl: string | null; platformPostId: string; platformPostCid: string | null; threadRootId: string | null; threadRootCid: string | null }>;
   replyToAuthor: { handle: string; dbPostId: number; postUrl: string | null } | null;
 }
 
