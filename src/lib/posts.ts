@@ -44,6 +44,8 @@ export interface BlueskyPostData {
   repostCount?: number;
   replyCount?: number;
   replyToUri?: string;
+  threadRootUri?: string;
+  threadRootCid?: string;
   repostOfUri?: string;
   repostedByHandle?: string;
   images?: Array<{ url: string; alt: string }>;
@@ -198,6 +200,8 @@ export async function storeBlueskyPosts(
       contentHtml: post.contentHtml || null,
       media: media && media.length > 0 ? media : null,
       replyToId: post.replyToUri || null,
+      threadRootId: post.threadRootUri || null,
+      threadRootCid: post.threadRootCid || null,
       repostOfId: post.repostOfUri || null,
       quotedPost: post.quotedPost || null,
       linkCard: post.linkCard ? JSON.stringify(post.linkCard) : null,
@@ -221,6 +225,9 @@ export async function storeBlueskyPosts(
         media: sql`values(${posts.media})`,
         quotedPost: sql`values(${posts.quotedPost})`,
         linkCard: sql`values(${posts.linkCard})`,
+        replyToId: sql`values(${posts.replyToId})`,
+        threadRootId: sql`values(${posts.threadRootId})`,
+        threadRootCid: sql`values(${posts.threadRootCid})`,
         likeCount: sql`values(${posts.likeCount})`,
         repostCount: sql`values(${posts.repostCount})`,
         replyCount: sql`values(${posts.replyCount})`,
@@ -855,6 +862,8 @@ export interface TimelinePost {
   contentHtml: string | null;
   media: unknown;
   replyToId: string | null;
+  threadRootId: string | null;
+  threadRootCid: string | null;
   repostOfId: string | null;
   quotedPost: unknown;
   linkCard: LinkCardData | null;
@@ -932,6 +941,8 @@ export async function queryTimeline(
       contentHtml: row.post.contentHtml,
       media: typeof row.post.media === "string" ? JSON.parse(row.post.media) : row.post.media,
       replyToId: row.post.replyToId,
+      threadRootId: row.post.threadRootId || null,
+      threadRootCid: row.post.threadRootCid || null,
       repostOfId: row.post.repostOfId,
       quotedPost: typeof row.post.quotedPost === "string" ? JSON.parse(row.post.quotedPost) : row.post.quotedPost,
       linkCard: typeof row.post.linkCard === "string" ? JSON.parse(row.post.linkCard) : (row.post.linkCard ?? null),
@@ -1113,6 +1124,8 @@ function mapBlueskyFeedItem(item: { post: Record<string, unknown>; reason?: unkn
     repostCount: post.repostCount,
     replyCount: post.replyCount,
     replyToUri: post.record?.reply?.parent?.uri || undefined,
+    threadRootUri: post.record?.reply?.root?.uri || undefined,
+    threadRootCid: post.record?.reply?.root?.cid || undefined,
     repostOfUri: item.reason ? post.uri : undefined,
     images: extractBlueskyImages(post.embed),
     quotedPost: extractQuotedPost(post.embed),

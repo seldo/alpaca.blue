@@ -12,6 +12,7 @@ interface BlobRef {
 interface PostBody {
   text: string;
   replyTo?: { uri: string; cid: string };
+  replyRoot?: { uri: string; cid: string };
   quote?: { uri: string; cid: string };
   images?: { image: BlobRef; alt: string }[];
 }
@@ -21,7 +22,7 @@ export async function POST(request: NextRequest) {
   if (!session) return unauthorizedResponse();
 
   const body: PostBody = await request.json();
-  const { text, replyTo, quote, images } = body;
+  const { text, replyTo, replyRoot, quote, images } = body;
 
   if (!text?.trim()) {
     return NextResponse.json({ error: "text is required" }, { status: 400 });
@@ -34,8 +35,9 @@ export async function POST(request: NextRequest) {
   const postParams: Record<string, any> = { text: text.trim() };
 
   if (replyTo) {
-    const ref = { uri: replyTo.uri, cid: replyTo.cid };
-    postParams.reply = { root: ref, parent: ref };
+    const parentRef = { uri: replyTo.uri, cid: replyTo.cid };
+    const rootRef = replyRoot ?? parentRef;
+    postParams.reply = { root: rootRef, parent: parentRef };
   }
 
   if (images && images.length > 0) {

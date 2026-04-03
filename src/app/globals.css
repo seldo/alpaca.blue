@@ -39,6 +39,7 @@ body {
   font-family: 'Work Sans', system-ui, -apple-system, sans-serif;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
 }
 
 /* Main layout */

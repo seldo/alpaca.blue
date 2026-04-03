@@ -96,6 +96,8 @@ export const posts = mysqlTable(
     contentHtml: text("content_html"),
     media: json("media"),
     replyToId: varchar("reply_to_id", { length: 255 }),
+    threadRootId: varchar("thread_root_id", { length: 255 }),
+    threadRootCid: varchar("thread_root_cid", { length: 255 }),
     repostOfId: varchar("repost_of_id", { length: 255 }),
     quotedPost: json("quoted_post"),
     linkCard: text("link_card"),

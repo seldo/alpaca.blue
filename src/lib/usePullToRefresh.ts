@@ -16,6 +16,7 @@ export function usePullToRefresh(onRefresh: () => Promise<void>, disabled = fals
 
   // Touch state
   const touchStartY = useRef(0);
+  const touchStartX = useRef(0);
   const touchActive = useRef(false);
   const touchDistance = useRef(0);
 
@@ -50,19 +51,22 @@ export function usePullToRefresh(onRefresh: () => Promise<void>, disabled = fals
     const onTouchStart = (e: TouchEvent) => {
       if (disabledRef.current || refreshingRef.current || window.scrollY > 0) return;
       touchStartY.current = e.touches[0].clientY;
+      touchStartX.current = e.touches[0].clientX;
       touchActive.current = true;
     };
 
     const onTouchMove = (e: TouchEvent) => {
       if (!touchActive.current) return;
-      const delta = e.touches[0].clientY - touchStartY.current;
-      if (delta <= 0 || window.scrollY > 0) {
+      const deltaY = e.touches[0].clientY - touchStartY.current;
+      const deltaX = Math.abs(e.touches[0].clientX - touchStartX.current);
+      if (deltaY <= 0 || window.scrollY > 0 || deltaX > deltaY) {
         touchActive.current = false;
         touchDistance.current = 0;
         setPullDistance(0);
         return;
       }
-      const capped = Math.min(delta, MAX_PULL);
+      e.preventDefault();
+      const capped = Math.min(deltaY, MAX_PULL);
       touchDistance.current = capped;
       setPullDistance(capped);
     };
@@ -110,7 +114,7 @@ export function usePullToRefresh(onRefresh: () => Promise<void>, disabled = fals
     };
 
     window.addEventListener("touchstart", onTouchStart, { passive: true });
-    window.addEventListener("touchmove", onTouchMove, { passive: true });
+    window.addEventListener("touchmove", onTouchMove, { passive: false });
     window.addEventListener("touchend", onTouchEnd);
     window.addEventListener("wheel", onWheel, { passive: true });
 

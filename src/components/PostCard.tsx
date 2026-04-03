@@ -82,6 +82,8 @@ interface PostData {
   contentHtml: string | null;
   media: MediaItem[] | null;
   replyToId: string | null;
+  threadRootId?: string | null;
+  threadRootCid?: string | null;
   repostOfId: string | null;
   quotedPost: {
     uri: string;
@@ -301,6 +303,9 @@ export function PostCard({ post }: { post: PostData }) {
           body: JSON.stringify({
             text: replyText.trim(),
             replyTo: { uri: post.platformPostId, cid: post.platformPostCid },
+            replyRoot: post.threadRootId && post.threadRootCid
+              ? { uri: post.threadRootId, cid: post.threadRootCid }
+              : { uri: post.platformPostId, cid: post.platformPostCid },
           }),
         });
         if (res.ok) {
