@@ -85,10 +85,13 @@ export default function MentionsPage() {
     setFetching(true);
     setFetchError(null);
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+
     try {
       const [mentionsResult, reactionsResult] = await Promise.allSettled([
-        fetch("/api/timeline?type=mentions&limit=50"),
-        fetch("/api/reactions/fetch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }),
+        fetch("/api/timeline?type=mentions&limit=50", { signal: controller.signal }),
+        fetch("/api/reactions/fetch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}), signal: controller.signal }),
       ]);
 
       if (mentionsResult.status === "fulfilled" && mentionsResult.value.ok) {
@@ -108,6 +111,7 @@ export default function MentionsPage() {
     } catch (err) {
       console.error("Mentions fetch error:", err);
     } finally {
+      clearTimeout(timeout);
       setFetching(false);
       setLoading(false);
       isFetchingRef.current = false;

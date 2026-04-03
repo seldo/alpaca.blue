@@ -76,8 +76,11 @@ export default function TimelinePage() {
     setFetching(true);
     setFetchError(null);
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
+
     try {
-      const res = await fetch("/api/timeline?limit=50");
+      const res = await fetch("/api/timeline?limit=50", { signal: controller.signal });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         if (res.status === 401) {
@@ -93,6 +96,7 @@ export default function TimelinePage() {
     } catch (err) {
       console.error("Feed fetch error:", err);
     } finally {
+      clearTimeout(timeout);
       setFetching(false);
       setLoading(false);
       isFetchingRef.current = false;
