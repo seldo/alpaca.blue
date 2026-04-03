@@ -64,6 +64,7 @@ export function CreatePost({ onClose, onPosted }: CreatePostProps) {
   const [text, setText] = useState("");
   const [images, setImages] = useState<File[]>([]);
   const [previews, setPreviews] = useState<string[]>([]);
+  const [alts, setAlts] = useState<string[]>([]);
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
@@ -84,36 +85,36 @@ export function CreatePost({ onClose, onPosted }: CreatePostProps) {
 
     const compressed = await Promise.all(toAdd.map(compressImage));
     setImages((prev) => [...prev, ...compressed]);
-    setPreviews((prev) => [
-      ...prev,
-      ...compressed.map((f) => URL.createObjectURL(f)),
-    ]);
+    setPreviews((prev) => [...prev, ...compressed.map((f) => URL.createObjectURL(f))]);
+    setAlts((prev) => [...prev, ...compressed.map(() => "")]);
   }
 
   function removeImage(index: number) {
     URL.revokeObjectURL(previews[index]);
     setImages((prev) => prev.filter((_, i) => i !== index));
     setPreviews((prev) => prev.filter((_, i) => i !== index));
+    setAlts((prev) => prev.filter((_, i) => i !== index));
   }
 
   async function uploadToBluesky(): Promise<{ image: unknown; alt: string }[]> {
     return Promise.all(
-      images.map(async (file) => {
+      images.map(async (file, i) => {
         const formData = new FormData();
         formData.append("file", file);
         const res = await fetch("/api/bluesky/upload-blob", { method: "POST", body: formData });
         if (!res.ok) throw new Error("Bluesky media upload failed");
         const data = await res.json();
-        return { image: data.blob, alt: "" };
+        return { image: data.blob, alt: alts[i] || "" };
       })
     );
   }
 
   async function uploadToMastodon(): Promise<string[]> {
     return Promise.all(
-      images.map(async (file) => {
+      images.map(async (file, i) => {
         const formData = new FormData();
         formData.append("file", file);
+        if (alts[i]) formData.append("description", alts[i]);
         const res = await fetch("/api/posts/upload-media", {
           method: "POST",
           body: formData,
@@ -233,16 +234,27 @@ export function CreatePost({ onClose, onPosted }: CreatePostProps) {
         <div className="create-post-images">
           {previews.map((src, i) => (
             <div key={i} className="create-post-image-preview">
-              <img src={src} alt="" />
-              <button
-                type="button"
-                className="create-post-image-remove"
-                onClick={() => removeImage(i)}
+              <div className="create-post-image-preview-thumb">
+                <img src={src} alt="" />
+                <button
+                  type="button"
+                  className="create-post-image-remove"
+                  onClick={() => removeImage(i)}
+                  disabled={posting}
+                  aria-label="Remove image"
+                >
+                  ×
+                </button>
+              </div>
+              <input
+                type="text"
+                className="create-post-alt-input"
+                placeholder="Alt text…"
+                value={alts[i] || ""}
+                onChange={(e) => setAlts((prev) => prev.map((a, j) => j === i ? e.target.value : a))}
                 disabled={posting}
-                aria-label="Remove image"
-              >
-                ×
-              </button>
+                maxLength={1000}
+              />
             </div>
           ))}
         </div>

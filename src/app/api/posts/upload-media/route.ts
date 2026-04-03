@@ -36,6 +36,8 @@ export async function POST(request: NextRequest) {
 
     const uploadForm = new FormData();
     uploadForm.append("file", file);
+    const description = formData.get("description");
+    if (description) uploadForm.append("description", description as string);
 
     const response = await fetch(`${account.instanceUrl}/api/v2/media`, {
       method: "POST",
