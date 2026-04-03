@@ -1102,7 +1102,7 @@ function mapBlueskyFeedItem(item: { post: Record<string, unknown>; reason?: unkn
     uri: string;
     cid: string;
     author: { did: string; handle: string; avatar?: string; displayName?: string };
-    record: { text?: string; facets?: BlueskyFacet[]; reply?: { parent?: { uri?: string } } };
+    record: { text?: string; facets?: BlueskyFacet[]; reply?: { parent?: { uri?: string }; root?: { uri?: string; cid?: string } } };
     indexedAt: string;
     likeCount?: number;
     repostCount?: number;
