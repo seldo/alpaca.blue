@@ -10,7 +10,7 @@ interface CreatePostProps {
 const MAX_IMAGES = 4;
 const MAX_LENGTH = 300;
 const MAX_DIMENSION = 2048;
-const JPEG_QUALITY = 0.85;
+const MAX_BYTES = 950_000; // Bluesky limit is 1,000,000; leave headroom
 
 async function compressImage(file: File): Promise<File> {
   return new Promise((resolve, reject) => {
@@ -37,14 +37,22 @@ async function compressImage(file: File): Promise<File> {
       const ctx = canvas.getContext("2d")!;
       ctx.drawImage(img, 0, 0, width, height);
 
-      canvas.toBlob(
-        (blob) => {
-          if (!blob) { reject(new Error("Canvas toBlob failed")); return; }
-          resolve(new File([blob], file.name.replace(/\.[^.]+$/, ".jpg"), { type: "image/jpeg" }));
-        },
-        "image/jpeg",
-        JPEG_QUALITY
-      );
+      function tryQuality(quality: number) {
+        canvas.toBlob(
+          (blob) => {
+            if (!blob) { reject(new Error("Canvas toBlob failed")); return; }
+            if (blob.size <= MAX_BYTES || quality <= 0.1) {
+              resolve(new File([blob], file.name.replace(/\.[^.]+$/, ".jpg"), { type: "image/jpeg" }));
+            } else {
+              tryQuality(Math.round((quality - 0.1) * 10) / 10);
+            }
+          },
+          "image/jpeg",
+          quality
+        );
+      }
+
+      tryQuality(0.85);
     };
 
     img.onerror = () => { URL.revokeObjectURL(objectUrl); reject(new Error("Image load failed")); };

@@ -77,7 +77,7 @@ export default function TimelinePage() {
     setFetchError(null);
 
     try {
-      const res = await fetch("/api/posts/fetch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+      const res = await fetch("/api/timeline?limit=50");
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         if (res.status === 401) {
@@ -98,6 +98,30 @@ export default function TimelinePage() {
       isFetchingRef.current = false;
     }
   }, []);
+
+  const heartbeat = useCallback(() => {
+    if (document.hidden) return;
+    fetch("/api/posts/heartbeat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    }).catch(() => {});
+  }, []);
+
+  // After posting: bust debounce/cache then do a full UI refresh
+  const forceRefresh = useCallback(async () => {
+    await fetch("/api/posts/heartbeat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force: true }),
+    }).catch(() => {});
+    refreshFeed();
+  }, [refreshFeed]);
+
+  useEffect(() => {
+    const id = setInterval(heartbeat, 7000);
+    return () => clearInterval(id);
+  }, [heartbeat]);
 
   const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refreshFeed, fetching);
 
@@ -173,7 +197,7 @@ export default function TimelinePage() {
             <p className="create-post-modal-title">New Post</p>
             <CreatePost
               onClose={() => setComposeOpen(false)}
-              onPosted={() => { setComposeOpen(false); setTimeout(refreshFeed, 1000); }}
+              onPosted={() => { setComposeOpen(false); setTimeout(forceRefresh, 1000); }}
             />
           </div>
         </div>

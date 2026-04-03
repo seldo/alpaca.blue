@@ -87,11 +87,7 @@ export default function MentionsPage() {
 
     try {
       const [mentionsResult, reactionsResult] = await Promise.allSettled([
-        fetch("/api/posts/fetch", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ type: "mentions" }),
-        }),
+        fetch("/api/timeline?type=mentions&limit=50"),
         fetch("/api/reactions/fetch", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) }),
       ]);
 
@@ -117,6 +113,20 @@ export default function MentionsPage() {
       isFetchingRef.current = false;
     }
   }, []);
+
+  const heartbeat = useCallback(() => {
+    if (document.hidden) return;
+    fetch("/api/posts/heartbeat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    }).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    const id = setInterval(heartbeat, 7000);
+    return () => clearInterval(id);
+  }, [heartbeat]);
 
   const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refreshFeed, fetching);
 
