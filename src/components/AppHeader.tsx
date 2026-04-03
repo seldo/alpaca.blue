@@ -2,18 +2,17 @@
 
 import { useState, useEffect, type ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
-import { clearBlueskySession, setBlueskyAgent } from "@/lib/bluesky-oauth";
 import { CreatePost } from "@/components/CreatePost";
-import type { Agent } from "@atproto/api";
 
 interface UserInfo {
   id: number;
   blueskyHandle: string;
   displayName: string | null;
   avatarUrl: string | null;
+  needsReauth?: boolean;
 }
 
-export function AppLayout({ children, blueskyAgent }: { children: ReactNode; blueskyAgent?: Agent | null }) {
+export function AppLayout({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserInfo | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
   const router = useRouter();
@@ -27,22 +26,21 @@ export function AppLayout({ children, blueskyAgent }: { children: ReactNode; blu
   }, []);
 
   async function handleLogout() {
-    // Clear server session
     await fetch("/api/auth/logout", { method: "POST" });
-    // Clear cached agent and session storage
-    setBlueskyAgent(null);
     sessionStorage.clear();
-    // Navigate away first, then clear Bluesky OAuth storage
-    // (clearing IndexedDB while the OAuth client is active causes "database closed" errors)
     router.push("/login");
-    // Small delay to let navigation start before wiping IndexedDB
-    setTimeout(() => {
-      clearBlueskySession().catch(() => {});
-    }, 100);
   }
 
   return (
     <div className="app-layout">
+      {user?.needsReauth && (
+        <div className="reauth-banner">
+          Bluesky needs to be reconnected.{" "}
+          <button className="reauth-banner-btn" onClick={handleLogout}>Log out and back in</button>
+          {" "}to fix this.
+        </div>
+      )}
+      <div className="app-layout-body">
       <aside className="app-sidebar">
         <div className="app-sidebar-top">
           <a href="/" className="app-sidebar-logo">
@@ -153,7 +151,6 @@ export function AppLayout({ children, blueskyAgent }: { children: ReactNode; blu
           <div className="create-post-modal" onClick={(e) => e.stopPropagation()}>
             <p className="create-post-modal-title">New Post</p>
             <CreatePost
-              blueskyAgent={blueskyAgent ?? null}
               onClose={() => setComposeOpen(false)}
               onPosted={() => setComposeOpen(false)}
             />
@@ -197,6 +194,7 @@ export function AppLayout({ children, blueskyAgent }: { children: ReactNode; blu
           </svg>
         </a>
       </nav>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import {
-  storeBlueskyPosts,
+  fetchAndStoreBlueskyPosts,
   fetchAndStoreOwnMastodonPosts,
   getOwnIdentityIds,
   queryPostsByIdentities,
@@ -35,14 +35,13 @@ export async function POST(request: NextRequest) {
     if (!session) return unauthorizedResponse();
     const userId = session.userId!;
 
-    const body = await request.json();
-    const { posts: blueskyPosts } = body;
+    const body = await request.json().catch(() => ({}));
     const limit = Math.min(parseInt(body.limit || "50"), 100);
 
     await ensureBlueskyOwnIdentity(userId);
 
     await Promise.allSettled([
-      blueskyPosts?.length > 0 ? storeBlueskyPosts(blueskyPosts, userId) : Promise.resolve(),
+      fetchAndStoreBlueskyPosts(userId),
       fetchAndStoreOwnMastodonPosts(userId),
     ]);
 

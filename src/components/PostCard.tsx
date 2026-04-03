@@ -2,7 +2,6 @@
 
 import { useState, useCallback, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { getBlueskyAgent } from "@/lib/bluesky-oauth";
 
 function ImageModal({
   images,
@@ -115,22 +114,6 @@ interface PostData {
   linkCard?: { url: string; title: string; description?: string; thumb?: string } | null;
 }
 
-interface BlueskyAgentLike {
-  like: (uri: string, cid: string) => Promise<{ uri: string }>;
-  deleteLike: (uri: string) => Promise<void>;
-  repost: (uri: string, cid: string) => Promise<{ uri: string }>;
-  post: (record: {
-    text: string;
-    reply?: {
-      root: { uri: string; cid: string };
-      parent: { uri: string; cid: string };
-    };
-    embed?: {
-      $type: string;
-      record: { uri: string; cid: string };
-    };
-  }) => Promise<{ uri: string; cid: string }>;
-}
 
 function getPostUrl(post: PostData): string | null {
   // Use canonical URL from the platform when available
@@ -200,7 +183,7 @@ function formatCount(n: number | null): string {
   return String(n);
 }
 
-export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?: BlueskyAgentLike | null }) {
+export function PostCard({ post }: { post: PostData }) {
   const author = post.author;
   const mediaItems: MediaItem[] = Array.isArray(post.media)
     ? post.media
@@ -248,17 +231,19 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
     if (favoriting) return;
 
     if (post.platform === "bluesky") {
-      const agent = blueskyAgent ?? getBlueskyAgent();
-      if (!agent || !post.platformPostCid) {
-        console.warn("Cannot favorite: missing agent or CID");
+      if (!post.platformPostCid) {
+        console.warn("Cannot favorite: missing CID");
         return;
       }
       if (favorited) return; // Can't unfavorite without stored like URI
-      // Optimistic update
       setFavorited(true);
       setLocalLikeCount((c) => c + 1);
       setFavoriting(true);
-      agent.like(post.platformPostId, post.platformPostCid).catch((err) => {
+      fetch("/api/bluesky/like", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ uri: post.platformPostId, cid: post.platformPostCid }),
+      }).catch((err) => {
         console.error("Favorite error:", err);
         setFavorited(false);
         setLocalLikeCount((c) => c - 1);
@@ -306,19 +291,26 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
 
     try {
       if (post.platform === "bluesky") {
-        const agent = blueskyAgent ?? getBlueskyAgent();
-        if (!agent || !post.platformPostCid) {
-          console.warn("Cannot reply: missing agent or CID");
+        if (!post.platformPostCid) {
+          console.warn("Cannot reply: missing CID");
           return;
         }
-        const ref = { uri: post.platformPostId, cid: post.platformPostCid };
-        await agent.post({
-          text: replyText.trim(),
-          reply: { root: ref, parent: ref },
+        const res = await fetch("/api/bluesky/post", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: replyText.trim(),
+            replyTo: { uri: post.platformPostId, cid: post.platformPostCid },
+          }),
         });
-        setReplySuccess(true);
-        setReplyText("");
-        setLocalReplyCount((c) => c + 1);
+        if (res.ok) {
+          setReplySuccess(true);
+          setReplyText("");
+          setLocalReplyCount((c) => c + 1);
+        } else {
+          const data = await res.json();
+          console.error("Reply failed:", data.error);
+        }
       } else if (post.platform === "mastodon") {
         const res = await fetch(`/api/posts/${post.id}/reply`, {
           method: "POST",
@@ -354,13 +346,16 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
 
     try {
       if (post.platform === "bluesky") {
-        const agent = blueskyAgent ?? getBlueskyAgent();
-        if (!agent || !post.platformPostCid) {
-          console.warn("Cannot repost: missing agent or CID");
+        if (!post.platformPostCid) {
+          console.warn("Cannot repost: missing CID");
           return;
         }
         if (reposted) return; // Can't undo Bluesky reposts without stored URI
-        await agent.repost(post.platformPostId, post.platformPostCid);
+        await fetch("/api/bluesky/repost", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ uri: post.platformPostId, cid: post.platformPostCid }),
+        });
         setReposted(true);
         setLocalRepostCount((c) => c + 1);
       } else if (post.platform === "mastodon") {
@@ -400,20 +395,22 @@ export function PostCard({ post, blueskyAgent }: { post: PostData; blueskyAgent?
 
     try {
       if (post.platform === "bluesky") {
-        const agent = blueskyAgent ?? getBlueskyAgent();
-        if (!agent || !post.platformPostCid) {
-          console.warn("Cannot quote: missing agent or CID");
+        if (!post.platformPostCid) {
+          console.warn("Cannot quote: missing CID");
           return;
         }
-        await agent.post({
-          text: quoteText.trim(),
-          embed: {
-            $type: "app.bsky.embed.record",
-            record: { uri: post.platformPostId, cid: post.platformPostCid },
-          },
+        const res = await fetch("/api/bluesky/post", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            text: quoteText.trim(),
+            quote: { uri: post.platformPostId, cid: post.platformPostCid },
+          }),
         });
-        setQuoteSuccess(true);
-        setQuoteText("");
+        if (res.ok) {
+          setQuoteSuccess(true);
+          setQuoteText("");
+        }
       } else if (post.platform === "mastodon") {
         // Mastodon doesn't support native quote posts — post as a standalone status with the URL
         const postLink = post.postUrl || "";

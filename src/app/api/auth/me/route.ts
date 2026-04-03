@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { users } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { requireSession, unauthorizedResponse } from "@/lib/session";
+import { redis, KEY_PREFIX } from "@/lib/redis";
 
 export async function GET() {
   const session = await requireSession();
@@ -19,11 +20,16 @@ export async function GET() {
     return unauthorizedResponse();
   }
 
+  const hasBlueskySession = user.blueskyDid
+    ? !!(await redis.exists(`${KEY_PREFIX}bluesky:session:${user.blueskyDid}`).catch(() => 1))
+    : false;
+
   return NextResponse.json({
     id: user.id,
     blueskyDid: user.blueskyDid,
     blueskyHandle: user.blueskyHandle,
     displayName: user.displayName,
     avatarUrl: user.avatarUrl,
+    needsReauth: !hasBlueskySession,
   });
 }

@@ -1,95 +1,44 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
-import { useRouter } from "next/navigation";
-import type { BrowserOAuthClient } from "@atproto/oauth-client-browser";
-import { getBlueskyOAuthClient, setBlueskyAgent, clearBlueskySession } from "@/lib/bluesky-oauth";
+import { useState, useEffect } from "react";
+import { useSearchParams } from "next/navigation";
+import { Suspense } from "react";
 
-export default function LoginPage() {
+function LoginForm() {
   const [handle, setHandle] = useState("");
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const clientRef = useRef<BrowserOAuthClient | null>(null);
-  const router = useRouter();
+  const searchParams = useSearchParams();
 
   useEffect(() => {
-    initOAuth();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    const err = searchParams.get("error");
+    if (err) setError(decodeURIComponent(err));
+  }, [searchParams]);
 
-  async function initOAuth() {
-    try {
-      let client = await getBlueskyOAuthClient();
-      clientRef.current = client;
-
-      // Check if returning from OAuth redirect
-      let result;
-      try {
-        result = await client.init();
-      } catch (initErr) {
-        // "database closed" can happen if IndexedDB was cleared during logout
-        // while the cached client still held a reference. Retry with a fresh client.
-        if (initErr instanceof Error && initErr.message.includes("database")) {
-          await clearBlueskySession();
-          client = await getBlueskyOAuthClient();
-          clientRef.current = client;
-          result = await client.init();
-        } else {
-          throw initErr;
-        }
-      }
-
-      if (result?.session) {
-        setStatus("Logging in...");
-        setLoading(true);
-
-        const { Agent } = await import("@atproto/api");
-        const agent = new Agent(result.session);
-        setBlueskyAgent(agent);
-
-        const profile = await agent.getProfile({
-          actor: result.session.did,
-        });
-
-        // This creates/finds the user and sets the session cookie
-        const res = await fetch("/api/auth/bluesky", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            handle: profile.data.handle,
-            did: result.session.did,
-            avatarUrl: profile.data.avatar || null,
-            displayName: profile.data.displayName || null,
-          }),
-        });
-
-        if (!res.ok) {
-          const data = await res.json();
-          throw new Error(data.error || "Login failed");
-        }
-
-        router.push("/");
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "OAuth init failed");
-      setLoading(false);
-    }
-  }
-
-  async function handleSignIn(e: React.FormEvent) {
+  async function handleSignIn(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const trimmedHandle = handle.trim().replace(/^@/, "");
-    if (!trimmedHandle || !clientRef.current) return;
+    if (!trimmedHandle) return;
 
     setLoading(true);
     setError(null);
     setStatus("Redirecting to Bluesky...");
 
     try {
-      await clientRef.current.signIn(trimmedHandle, {
-        scope: "atproto transition:generic",
+      const res = await fetch("/api/auth/bluesky/authorize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ handle: trimmedHandle }),
       });
+
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Authorization failed");
+      }
+
+      const { url } = await res.json();
+      window.location.href = url;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign in failed");
       setLoading(false);
@@ -126,7 +75,7 @@ export default function LoginPage() {
           />
           <button
             type="submit"
-            disabled={loading || !clientRef.current}
+            disabled={loading}
             className="btn btn-bluesky btn-full"
           >
             {loading ? status || "Connecting..." : "Log in with Bluesky"}
@@ -136,5 +85,13 @@ export default function LoginPage() {
         {error && <p className="error">{error}</p>}
       </div>
     </main>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense>
+      <LoginForm />
+    </Suspense>
   );
 }

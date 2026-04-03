@@ -1,8 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
-import type { BrowserOAuthClient } from "@atproto/oauth-client-browser";
-import { getBlueskyOAuthClient, setBlueskyAgent } from "@/lib/bluesky-oauth";
+import { useState } from "react";
 
 export function BlueskyConnect({
   onConnected,
@@ -11,71 +9,31 @@ export function BlueskyConnect({
 }) {
   const [handle, setHandle] = useState("");
   const [loading, setLoading] = useState(false);
-  const [status, setStatus] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const clientRef = useRef<BrowserOAuthClient | null>(null);
 
-  useEffect(() => {
-    initOAuth();
-  }, []);
-
-  async function initOAuth() {
-    try {
-      const client = await getBlueskyOAuthClient();
-      clientRef.current = client;
-
-      // Check if returning from OAuth redirect
-      const result = await client.init();
-
-      if (result?.session) {
-        setStatus("Saving connection...");
-        setLoading(true);
-
-        const { Agent } = await import("@atproto/api");
-        const agent = new Agent(result.session);
-        setBlueskyAgent(agent);
-
-        const profile = await agent.getProfile({
-          actor: result.session.did,
-        });
-
-        await fetch("/api/auth/bluesky", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            handle: profile.data.handle,
-            did: result.session.did,
-            avatarUrl: profile.data.avatar || null,
-            displayName: profile.data.displayName || null,
-          }),
-        });
-
-        setLoading(false);
-        setStatus("");
-        onConnected();
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "OAuth init failed");
-    }
-  }
-
-  async function handleSignIn(e: React.FormEvent) {
+  async function handleSignIn(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     const trimmedHandle = handle.trim().replace(/^@/, "");
-    if (!trimmedHandle || !clientRef.current) return;
+    if (!trimmedHandle) return;
 
     setLoading(true);
     setError(null);
-    setStatus("Redirecting to Bluesky...");
 
     try {
-      await clientRef.current.signIn(trimmedHandle, {
-        scope: "atproto transition:generic",
+      const res = await fetch("/api/auth/bluesky/authorize", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ handle: trimmedHandle }),
       });
+      if (!res.ok) {
+        const data = await res.json();
+        throw new Error(data.error || "Authorization failed");
+      }
+      const { url } = await res.json();
+      window.location.href = url;
     } catch (err) {
       setError(err instanceof Error ? err.message : "Sign in failed");
       setLoading(false);
-      setStatus("");
     }
   }
 
@@ -99,12 +57,8 @@ export function BlueskyConnect({
           required
         />
         <div className="form-footer-end">
-          <button
-            type="submit"
-            disabled={loading || !clientRef.current}
-            className="btn btn-bluesky"
-          >
-            {loading ? status || "Connecting..." : "Connect"}
+          <button type="submit" disabled={loading} className="btn btn-bluesky">
+            {loading ? "Redirecting..." : "Connect"}
           </button>
         </div>
       </form>

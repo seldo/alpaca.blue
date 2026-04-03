@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { storeBlueskyFollows } from "@/lib/bluesky";
 import { importMastodonFollows } from "@/lib/mastodon";
+import { getServerBlueskyAgent } from "@/lib/bluesky-server";
 import { requireSession, unauthorizedResponse } from "@/lib/session";
+import { db } from "@/db";
+import { users } from "@/db/schema";
+import { eq } from "drizzle-orm";
 
 export async function POST(request: NextRequest) {
   try {
@@ -13,18 +17,24 @@ export async function POST(request: NextRequest) {
     const { platform } = body;
 
     if (platform === "bluesky") {
-      const { follows } = body;
-      if (!follows || !Array.isArray(follows)) {
-        return NextResponse.json(
-          { error: "follows array is required for Bluesky import" },
-          { status: 400 }
-        );
-      }
-      const result = await storeBlueskyFollows(follows, userId);
-      return NextResponse.json({
-        platform: "bluesky",
-        imported: result.imported,
-      });
+      const agent = await getServerBlueskyAgent(userId);
+      if (!agent) return NextResponse.json({ error: "Bluesky session not found" }, { status: 401 });
+
+      const [user] = await db.select({ blueskyDid: users.blueskyDid }).from(users).where(eq(users.id, userId)).limit(1);
+      if (!user?.blueskyDid) return NextResponse.json({ error: "No Bluesky account" }, { status: 400 });
+
+      const allFollows: Array<{ handle: string; did: string; displayName?: string; avatar?: string; description?: string }> = [];
+      let cursor: string | undefined;
+      do {
+        const response = await agent.getFollows({ actor: user.blueskyDid, limit: 100, cursor });
+        for (const follow of response.data.follows) {
+          allFollows.push({ handle: follow.handle, did: follow.did, displayName: follow.displayName, avatar: follow.avatar, description: follow.description });
+        }
+        cursor = response.data.cursor;
+      } while (cursor);
+
+      const result = await storeBlueskyFollows(allFollows, userId);
+      return NextResponse.json({ platform: "bluesky", imported: result.imported });
     }
 
     if (platform === "mastodon") {

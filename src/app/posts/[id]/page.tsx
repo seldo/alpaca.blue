@@ -1,11 +1,7 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import {
-  getBlueskyAgent,
-  restoreBlueskySession,
-} from "@/lib/bluesky-oauth";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
 
@@ -58,14 +54,9 @@ export default function PostPage() {
   const [loading, setLoading] = useState(true);
   const [threadLoading, setThreadLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const agentRef = useRef<import("@atproto/api").Agent | null>(null);
 
   useEffect(() => {
     async function init() {
-      let agent = getBlueskyAgent();
-      if (!agent) agent = await restoreBlueskySession();
-      if (agent) agentRef.current = agent;
-
       try {
         const res = await fetch(`/api/posts/${params.id}`);
         if (!res.ok) {
@@ -123,12 +114,12 @@ export default function PostPage() {
         <div className="thread-view">
           {ancestors.map((ancestor) => (
             <div key={`${ancestor.platform}-${ancestor.platformPostId}`} className="thread-ancestor-node">
-              <PostCard post={ancestor} blueskyAgent={agentRef.current} />
+              <PostCard post={ancestor} />
             </div>
           ))}
 
           <div className="thread-focal-node">
-            <PostCard post={post} blueskyAgent={agentRef.current} />
+            <PostCard post={post} />
           </div>
 
           {(threadLoading && replies.length === 0) && (
@@ -144,8 +135,7 @@ export default function PostPage() {
                 <PostCard
                   key={`${reply.platform}-${reply.platformPostId}`}
                   post={reply}
-                  blueskyAgent={agentRef.current}
-                />
+                                 />
               ))}
             </>
           )}

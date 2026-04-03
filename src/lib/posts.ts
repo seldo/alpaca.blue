@@ -9,6 +9,7 @@ import {
 import { eq, and, lt, desc, isNull, inArray, sql } from "drizzle-orm";
 import { createHash } from "crypto";
 import { redis, keys, TTL } from "@/lib/redis";
+import { getServerBlueskyAgent } from "@/lib/bluesky-server";
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -961,4 +962,351 @@ export async function queryTimeline(
   }
 
   return response;
+}
+
+// ── Server-side Bluesky helpers ────────────────────────────
+
+interface BlueskyFacetFeature {
+  $type: string;
+  uri?: string;
+  did?: string;
+  tag?: string;
+}
+
+interface BlueskyFacet {
+  index: { byteStart: number; byteEnd: number };
+  features: BlueskyFacetFeature[];
+}
+
+function escapeHtml(str: string): string {
+  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function escapeAttr(str: string): string {
+  return str.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+function linkifyUrls(escaped: string): string {
+  return escaped.replace(
+    /(https?:\/\/[^\s<&]+)/g,
+    '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
+  );
+}
+
+function facetsToHtml(text: string, facets?: BlueskyFacet[]): string {
+  if (!facets || facets.length === 0) {
+    return linkifyUrls(escapeHtml(text));
+  }
+  const encoder = new TextEncoder();
+  const decoder = new TextDecoder();
+  const bytes = encoder.encode(text);
+  const sorted = [...facets].sort((a, b) => a.index.byteStart - b.index.byteStart);
+  let html = "";
+  let lastByte = 0;
+  for (const facet of sorted) {
+    const { byteStart, byteEnd } = facet.index;
+    if (byteStart < lastByte || byteEnd > bytes.length) continue;
+    html += linkifyUrls(escapeHtml(decoder.decode(bytes.slice(lastByte, byteStart))));
+    const facetText = escapeHtml(decoder.decode(bytes.slice(byteStart, byteEnd)));
+    const feature = facet.features[0];
+    if (feature?.$type === "app.bsky.richtext.facet#link" && feature.uri) {
+      html += `<a href="${escapeAttr(feature.uri)}" target="_blank" rel="noopener noreferrer">${facetText}</a>`;
+    } else if (feature?.$type === "app.bsky.richtext.facet#mention" && feature.did) {
+      html += `<a href="https://bsky.app/profile/${escapeAttr(feature.did)}" target="_blank" rel="noopener noreferrer">${facetText}</a>`;
+    } else if (feature?.$type === "app.bsky.richtext.facet#tag" && feature.tag) {
+      html += `<a href="https://bsky.app/hashtag/${escapeAttr(feature.tag)}" target="_blank" rel="noopener noreferrer">${facetText}</a>`;
+    } else {
+      html += facetText;
+    }
+    lastByte = byteEnd;
+  }
+  html += linkifyUrls(escapeHtml(decoder.decode(bytes.slice(lastByte))));
+  return html;
+}
+
+interface BlueskyImageView { thumb: string; alt: string; fullsize: string; }
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractBlueskyImages(embed: any): Array<{ url: string; alt: string }> {
+  if (!embed) return [];
+  const images: Array<{ url: string; alt: string }> = [];
+  if (embed.images && Array.isArray(embed.images)) {
+    for (const img of embed.images as BlueskyImageView[]) {
+      images.push({ url: img.fullsize || img.thumb, alt: img.alt || "" });
+    }
+  }
+  if (embed.media?.images && Array.isArray(embed.media.images)) {
+    for (const img of embed.media.images as BlueskyImageView[]) {
+      images.push({ url: img.fullsize || img.thumb, alt: img.alt || "" });
+    }
+  }
+  if (embed.playlist && embed.thumbnail) {
+    images.push({ url: embed.thumbnail, alt: "Video thumbnail" });
+  }
+  if (embed.media?.playlist && embed.media?.thumbnail) {
+    images.push({ url: embed.media.thumbnail, alt: "Video thumbnail" });
+  }
+  return images;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractQuotedPost(embed: any): QuotedPostData | undefined {
+  if (!embed) return undefined;
+  const record = embed.record?.record ?? embed.record;
+  if (!record?.author || !record?.value) return undefined;
+  if (record.$type && !record.$type.includes("viewRecord")) return undefined;
+  const quoted: QuotedPostData = {
+    uri: record.uri,
+    authorHandle: record.author.handle,
+    authorDisplayName: record.author.displayName || undefined,
+    authorAvatar: record.author.avatar || undefined,
+    text: (record.value as { text?: string })?.text || "",
+    postedAt: record.indexedAt || (record.value as { createdAt?: string })?.createdAt,
+  };
+  if (record.embeds && Array.isArray(record.embeds) && record.embeds.length > 0) {
+    const embeddedImages = extractBlueskyImages(record.embeds[0]);
+    if (embeddedImages.length > 0) {
+      quoted.media = embeddedImages.map((img) => ({ type: "image", url: img.url, alt: img.alt }));
+    }
+  }
+  return quoted;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function extractLinkCard(embed: any): LinkCardData | undefined {
+  if (!embed) return undefined;
+  const ext = embed.external ?? embed.media?.external;
+  if (!ext?.uri) return undefined;
+  return {
+    url: ext.uri,
+    title: ext.title || ext.uri,
+    description: ext.description || undefined,
+    thumb: ext.thumb || undefined,
+  };
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function mapBlueskyFeedItem(item: { post: Record<string, unknown>; reason?: unknown }, isMention = false): BlueskyPostData {
+  const post = item.post as {
+    uri: string;
+    cid: string;
+    author: { did: string; handle: string; avatar?: string; displayName?: string };
+    record: { text?: string; facets?: BlueskyFacet[]; reply?: { parent?: { uri?: string } } };
+    indexedAt: string;
+    likeCount?: number;
+    repostCount?: number;
+    replyCount?: number;
+    embed?: unknown;
+  };
+  const text = post.record?.text || "";
+  return {
+    uri: post.uri,
+    cid: post.cid,
+    authorDid: post.author.did,
+    authorHandle: post.author.handle,
+    authorDisplayName: post.author.displayName || undefined,
+    authorAvatar: post.author.avatar || undefined,
+    text,
+    contentHtml: facetsToHtml(text, post.record?.facets),
+    createdAt: post.indexedAt,
+    likeCount: post.likeCount,
+    repostCount: post.repostCount,
+    replyCount: post.replyCount,
+    replyToUri: post.record?.reply?.parent?.uri || undefined,
+    repostOfUri: item.reason ? post.uri : undefined,
+    images: extractBlueskyImages(post.embed),
+    quotedPost: extractQuotedPost(post.embed),
+    linkCard: extractLinkCard(post.embed),
+    isMention,
+  };
+}
+
+// ── Server-side Bluesky fetch & store ─────────────────────
+
+export async function fetchAndStoreBlueskyPosts(userId: number): Promise<{ stored: number }> {
+  const debounceKey = keys.blueskyFetched(userId, "timeline");
+  const recentlyFetched = await redis.get(debounceKey).catch(() => null);
+  if (recentlyFetched) {
+    console.log("[bluesky] timeline fetch skipped (debounced)");
+    return { stored: 0 };
+  }
+
+  const agent = await getServerBlueskyAgent(userId);
+  if (!agent) {
+    console.warn("[bluesky] no server agent for user", userId);
+    return { stored: 0 };
+  }
+
+  const response = await agent.getTimeline({ limit: 50 });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const blueskyPosts = response.data.feed.map((item) => mapBlueskyFeedItem(item as any));
+
+  const result = await storeBlueskyPosts(blueskyPosts, userId);
+  await redis.set(debounceKey, "1", { ex: TTL.blueskyFetchDebounce }).catch(() => {});
+  return result;
+}
+
+export async function fetchAndStoreBlueskyMentions(userId: number): Promise<{ stored: number }> {
+  const debounceKey = keys.blueskyFetched(userId, "mentions");
+  const recentlyFetched = await redis.get(debounceKey).catch(() => null);
+  if (recentlyFetched) {
+    console.log("[bluesky] mentions fetch skipped (debounced)");
+    return { stored: 0 };
+  }
+
+  const agent = await getServerBlueskyAgent(userId);
+  if (!agent) {
+    console.warn("[bluesky] no server agent for user", userId);
+    return { stored: 0 };
+  }
+
+  const response = await agent.listNotifications({ limit: 50 });
+  const notifications = response.data.notifications as Array<{
+    reason: string;
+    uri: string;
+    cid: string;
+    author: { did: string; handle: string; displayName?: string; avatar?: string };
+    record: unknown;
+    indexedAt: string;
+  }>;
+
+  const mentionNotifs = notifications.filter(
+    (n) => n.reason === "mention" || n.reason === "reply"
+  );
+
+  // Hydrate with embed data via getPosts
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const hydratedMap = new Map<string, { embed?: unknown; authorDisplayName?: string; authorAvatar?: string }>();
+  const mentionUris = mentionNotifs.map((n) => n.uri);
+  if (mentionUris.length > 0) {
+    try {
+      const postsRes = await agent.getPosts({ uris: mentionUris });
+      for (const p of postsRes.data.posts) {
+        const hp = p as unknown as { embed?: unknown; author: { displayName?: string; avatar?: string } };
+        hydratedMap.set(p.uri, {
+          embed: hp.embed,
+          authorDisplayName: hp.author.displayName || undefined,
+          authorAvatar: hp.author.avatar || undefined,
+        });
+      }
+    } catch (err) {
+      console.warn("[bluesky] Failed to hydrate mention embeds:", err);
+    }
+  }
+
+  const blueskyMentionPosts: BlueskyPostData[] = mentionNotifs.map((n) => {
+    const record = n.record as { text?: string; facets?: BlueskyFacet[]; reply?: { parent?: { uri?: string } } };
+    const text = record?.text || "";
+    const hydrated = hydratedMap.get(n.uri);
+    return {
+      uri: n.uri,
+      cid: n.cid,
+      authorDid: n.author.did,
+      authorHandle: n.author.handle,
+      authorDisplayName: hydrated?.authorDisplayName,
+      authorAvatar: hydrated?.authorAvatar,
+      text,
+      contentHtml: facetsToHtml(text, record?.facets),
+      createdAt: n.indexedAt,
+      replyToUri: record?.reply?.parent?.uri || undefined,
+      isMention: true,
+      images: extractBlueskyImages(hydrated?.embed),
+      quotedPost: extractQuotedPost(hydrated?.embed),
+    };
+  });
+
+  const result = await storeBlueskyPosts(blueskyMentionPosts, userId);
+  await redis.set(debounceKey, "1", { ex: TTL.blueskyFetchDebounce }).catch(() => {});
+  return result;
+}
+
+export async function fetchBlueskyReactions(userId: number): Promise<RawReaction[]> {
+  const cacheKey = keys.blueskyReactions(userId);
+  const cached = await redis.get<RawReaction[]>(cacheKey).catch(() => null);
+  if (cached) {
+    console.log("[bluesky] reactions cache hit");
+    return cached;
+  }
+
+  const agent = await getServerBlueskyAgent(userId);
+  if (!agent) return [];
+
+  const response = await agent.listNotifications({ limit: 50 });
+  const notifications = response.data.notifications as Array<{
+    reason: string;
+    uri: string;
+    cid: string;
+    author: { did: string; handle: string; displayName?: string; avatar?: string };
+    record: unknown;
+    indexedAt: string;
+    reasonSubject?: string;
+  }>;
+
+  const reactionNotifs = notifications.filter(
+    (n) => n.reason === "like" || n.reason === "repost" || n.reason === "follow" || n.reason === "quote"
+  );
+
+  // Batch-fetch subject post text
+  const subjectUris = [
+    ...new Set(reactionNotifs.filter((n) => n.reasonSubject).map((n) => n.reasonSubject!)),
+  ].slice(0, 25);
+
+  const subjectTextMap = new Map<string, string>();
+  const subjectMetaMap = new Map<string, { handle: string; displayName?: string; avatar?: string; postedAt?: string }>();
+  if (subjectUris.length > 0) {
+    try {
+      const subjectsRes = await agent.getPosts({ uris: subjectUris });
+      for (const p of subjectsRes.data.posts) {
+        const record = (p as unknown as { record: { text?: string } }).record;
+        const author = (p as unknown as { author: { handle: string; displayName?: string; avatar?: string } }).author;
+        const indexedAt = (p as unknown as { indexedAt?: string }).indexedAt;
+        subjectTextMap.set(p.uri, record?.text || "");
+        subjectMetaMap.set(p.uri, { handle: author?.handle || "", displayName: author?.displayName, avatar: author?.avatar, postedAt: indexedAt });
+      }
+    } catch (err) {
+      console.warn("[bluesky] Failed to fetch reaction subject posts:", err);
+    }
+  }
+
+  // Look up internal post IDs for subject URIs
+  const subjectInternalIdMap = new Map<string, number>();
+  if (subjectUris.length > 0) {
+    const rows = await db
+      .select({ id: posts.id, platformPostId: posts.platformPostId })
+      .from(posts)
+      .where(and(eq(posts.userId, userId), inArray(posts.platformPostId, subjectUris)));
+    for (const row of rows) {
+      subjectInternalIdMap.set(row.platformPostId, row.id);
+    }
+  }
+
+  const reactions: RawReaction[] = reactionNotifs.map((n) => {
+    const reactionType =
+      n.reason === "like" ? "like" as const :
+      n.reason === "repost" ? "repost" as const :
+      n.reason === "follow" ? "follow" as const :
+      "quote" as const;
+
+    const subjectId = n.reasonSubject ?? null;
+    const subjectText = subjectId ? (subjectTextMap.get(subjectId) ?? null) : null;
+    const internalId = subjectId ? subjectInternalIdMap.get(subjectId) : undefined;
+    const subjectUrl = internalId ? `/posts/${internalId}` : null;
+
+    return {
+      platform: "bluesky" as const,
+      reactionType,
+      subjectId,
+      subjectExcerpt: subjectText,
+      subjectUrl,
+      reactor: {
+        handle: n.author.handle,
+        displayName: n.author.displayName || n.author.handle,
+        avatarUrl: n.author.avatar || "",
+      },
+      reactedAt: n.indexedAt,
+    };
+  });
+
+  await redis.set(cacheKey, reactions, { ex: TTL.blueskyReactions }).catch(() => {});
+  return reactions;
 }

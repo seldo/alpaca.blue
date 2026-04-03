@@ -2,11 +2,6 @@
 
 import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import {
-  getBlueskyAgent,
-  setBlueskyAgent,
-  restoreBlueskySession,
-} from "@/lib/bluesky-oauth";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
 import { usePullToRefresh } from "@/lib/usePullToRefresh";
@@ -67,27 +62,11 @@ export default function PersonPage() {
   const [loading, setLoading] = useState(true);
   const [fetching, setFetching] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const agentRef = useRef<import("@atproto/api").Agent | null>(null);
   const isFetchingRef = useRef(false);
   const pendingScrollRestore = useRef<number | null>(null);
 
   const cacheKey = `person_cache_${personId}`;
   const scrollKey = `person_scroll_${personId}`;
-
-  useEffect(() => {
-    const existing = getBlueskyAgent();
-    if (existing) {
-      agentRef.current = existing;
-      return;
-    }
-    restoreBlueskySession().then((agent) => {
-      if (agent) {
-        agentRef.current = agent;
-      } else {
-        setBlueskyAgent(null);
-      }
-    }).catch(() => {});
-  }, []);
 
   const fetchData = useCallback(async () => {
     if (isFetchingRef.current) return;
@@ -255,7 +234,7 @@ export default function PersonPage() {
 
             <div className="timeline-feed">
               {posts.map((post) => (
-                <PostCard key={`${post.platform}-${post.id}`} post={post} blueskyAgent={agentRef.current} />
+                <PostCard key={`${post.platform}-${post.id}`} post={post} />
               ))}
 
               {nextCursor && (

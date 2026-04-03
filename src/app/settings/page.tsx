@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { AppLayout } from "@/components/AppHeader";
 import { MastodonConnect } from "@/components/MastodonConnect";
 import { ConnectedAccount } from "@/components/ConnectedAccount";
-import { clearBlueskySession, setBlueskyAgent } from "@/lib/bluesky-oauth";
 
 interface Account {
   id: number;
@@ -62,12 +61,8 @@ export default function SettingsPage() {
 
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
-    setBlueskyAgent(null);
     sessionStorage.clear();
     router.push("/login");
-    setTimeout(() => {
-      clearBlueskySession().catch(() => {});
-    }, 100);
   }
 
   async function handleResetAll() {

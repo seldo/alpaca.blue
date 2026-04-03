@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireSession, unauthorizedResponse } from "@/lib/session";
-import { fetchMastodonReactions } from "@/lib/posts";
+import { fetchMastodonReactions, fetchBlueskyReactions } from "@/lib/posts";
 import { groupReactions } from "@/lib/reactions";
-import type { RawReaction } from "@/lib/reactions";
 
 export async function POST(request: NextRequest) {
   try {
@@ -10,15 +9,23 @@ export async function POST(request: NextRequest) {
     if (!session) return unauthorizedResponse();
     const userId = session.userId!;
 
-    const body = await request.json();
-    const blueskyReactions: RawReaction[] = Array.isArray(body.blueskyReactions)
-      ? body.blueskyReactions
-      : [];
+    // Ignore body — both platforms fetched server-side now
+    void request;
 
-    const mastodonReactions = await fetchMastodonReactions(userId).catch((err) => {
-      console.error("[reactions/fetch] Mastodon reactions error:", err);
-      return [] as RawReaction[];
-    });
+    const [blueskyResult, mastodonResult] = await Promise.allSettled([
+      fetchBlueskyReactions(userId),
+      fetchMastodonReactions(userId),
+    ]);
+
+    const blueskyReactions = blueskyResult.status === "fulfilled" ? blueskyResult.value : [];
+    const mastodonReactions = mastodonResult.status === "fulfilled" ? mastodonResult.value : [];
+
+    if (blueskyResult.status === "rejected") {
+      console.error("[reactions/fetch] Bluesky reactions error:", blueskyResult.reason);
+    }
+    if (mastodonResult.status === "rejected") {
+      console.error("[reactions/fetch] Mastodon reactions error:", mastodonResult.reason);
+    }
 
     const reactionGroups = groupReactions([...blueskyReactions, ...mastodonReactions]);
     return NextResponse.json({ reactionGroups });

@@ -1,11 +1,8 @@
 "use client";
 
 import { useState, useRef } from "react";
-import type { Agent, BlobRef } from "@atproto/api";
-import { getBlueskyAgent } from "@/lib/bluesky-oauth";
 
 interface CreatePostProps {
-  blueskyAgent: Agent | null;
   onClose?: () => void;
   onPosted?: () => void;
 }
@@ -55,7 +52,7 @@ async function compressImage(file: File): Promise<File> {
   });
 }
 
-export function CreatePost({ blueskyAgent, onClose, onPosted }: CreatePostProps) {
+export function CreatePost({ onClose, onPosted }: CreatePostProps) {
   const [text, setText] = useState("");
   const [images, setImages] = useState<File[]>([]);
   const [previews, setPreviews] = useState<string[]>([]);
@@ -91,12 +88,14 @@ export function CreatePost({ blueskyAgent, onClose, onPosted }: CreatePostProps)
     setPreviews((prev) => prev.filter((_, i) => i !== index));
   }
 
-  async function uploadToBluesky(agent: Agent): Promise<{ image: BlobRef; alt: string }[]> {
+  async function uploadToBluesky(): Promise<{ image: unknown; alt: string }[]> {
     return Promise.all(
       images.map(async (file) => {
-        const arrayBuffer = await file.arrayBuffer();
-        const uint8 = new Uint8Array(arrayBuffer);
-        const { data } = await agent.uploadBlob(uint8, { encoding: file.type });
+        const formData = new FormData();
+        formData.append("file", file);
+        const res = await fetch("/api/bluesky/upload-blob", { method: "POST", body: formData });
+        if (!res.ok) throw new Error("Bluesky media upload failed");
+        const data = await res.json();
         return { image: data.blob, alt: "" };
       })
     );
@@ -128,9 +127,6 @@ export function CreatePost({ blueskyAgent, onClose, onPosted }: CreatePostProps)
     const results: string[] = [];
     const errors: string[] = [];
 
-    // Use the live cached agent in case it was restored after this component rendered
-    const agent = blueskyAgent ?? getBlueskyAgent();
-
     // When images are present, Mastodon goes first — Bluesky only posts if Mastodon succeeds
     if (images.length > 0) {
       let mastodonOk = false;
@@ -152,48 +148,39 @@ export function CreatePost({ blueskyAgent, onClose, onPosted }: CreatePostProps)
         errors.push("Mastodon");
       }
 
-      if (mastodonOk && agent) {
+      if (mastodonOk) {
         try {
-          const blueskyImages = await uploadToBluesky(agent);
-          await agent.post({
-            text: content,
-            embed: { $type: "app.bsky.embed.images", images: blueskyImages },
+          const blueskyImages = await uploadToBluesky();
+          const bsRes = await fetch("/api/bluesky/post", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: content, images: blueskyImages }),
           });
-          results.push("Bluesky");
+          if (bsRes.ok) results.push("Bluesky");
+          else errors.push("Bluesky");
         } catch (err) {
           console.error("Bluesky post error:", err);
           errors.push("Bluesky");
         }
-      } else if (mastodonOk && !agent) {
-        console.warn("Bluesky agent unavailable — image post skipped for Bluesky");
-        errors.push("Bluesky");
       }
     } else {
       // No images — post to both independently
-      if (agent) {
-        try {
-          await agent.post({ text: content });
-          results.push("Bluesky");
-        } catch (err) {
-          console.error("Bluesky post error:", err);
-          errors.push("Bluesky");
-        }
-      }
-
-      try {
-        const res = await fetch("/api/posts/create", {
+      const [bsRes, mastoRes] = await Promise.allSettled([
+        fetch("/api/bluesky/post", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: content }),
+        }),
+        fetch("/api/posts/create", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ content }),
-        });
-        if (res.ok) {
-          results.push("Mastodon");
-        } else {
-          errors.push("Mastodon");
-        }
-      } catch {
-        errors.push("Mastodon");
-      }
+        }),
+      ]);
+      if (bsRes.status === "fulfilled" && bsRes.value.ok) results.push("Bluesky");
+      else errors.push("Bluesky");
+      if (mastoRes.status === "fulfilled" && mastoRes.value.ok) results.push("Mastodon");
+      else errors.push("Mastodon");
     }
 
     setPosting(false);

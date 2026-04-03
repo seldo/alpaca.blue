@@ -1,18 +1,12 @@
-import { NextRequest } from "next/server";
-
-export async function GET(request: NextRequest) {
-  const origin =
-    request.headers.get("x-forwarded-proto") && request.headers.get("host")
-      ? `${request.headers.get("x-forwarded-proto")}://${request.headers.get("host")}`
-      : request.nextUrl.origin;
-
+export async function GET() {
+  const origin = (process.env.APP_URL || "https://alpaca.blue").replace(/\/$/, "");
   const clientId = `${origin}/api/client-metadata`;
 
   return Response.json({
     client_id: clientId,
     client_name: "alpaca.blue",
     client_uri: origin,
-    redirect_uris: [`${origin}/login`],
+    redirect_uris: [`${origin}/api/auth/bluesky/callback`],
     scope: "atproto transition:generic",
     grant_types: ["authorization_code", "refresh_token"],
     response_types: ["code"],
