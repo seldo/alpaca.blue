@@ -56,12 +56,15 @@ src/
           link/route.ts                # POST manual identity link
           unlink/route.ts              # POST unlink identity from person
       posts/
-        fetch/route.ts                 # POST — fetches from both platforms server-side, stores, returns timeline
+        heartbeat/route.ts             # POST — triggered every 7s by client; fetches all platforms if debounce expired
+        fetch/route.ts                 # POST — legacy full fetch+return (still used by manual refresh paths)
+        create/route.ts                # POST {content, mediaIds?} → post to Mastodon
+        upload-media/route.ts          # POST FormData{file} → Mastodon /api/v1/media → {id}
         lookup/route.ts                # POST find/create post by platform URI
         [id]/route.ts                  # GET single post with cross-post lookup
       reactions/
-        fetch/route.ts                 # POST — fetches reactions from both platforms server-side
-      timeline/route.ts               # GET merged deduplicated timeline (supports ?type=mentions)
+        fetch/route.ts                 # POST — fetches reactions from both platforms server-side (cached 60s)
+      timeline/route.ts               # GET merged deduplicated timeline (supports ?type=mentions); reads from Redis/DB only
       persons/[id]/posts/route.ts     # GET posts for a specific person
   components/
     AppHeader.tsx                      # App layout: sidebar nav + mobile bottom bar
@@ -96,15 +99,17 @@ public/
 ## How It Works
 
 - **Authentication:** Bluesky OAuth is the login mechanism. Users connect an optional Mastodon account after login. All accounts are isolated per-user via `userId` foreign keys.
-- **Post fetching:** Both Bluesky and Mastodon posts are fetched server-side and stored in the DB. Fetches are debounced (30s) to avoid hammering APIs on rapid page loads.
+- **Post fetching:** A client-side heartbeat fires every 7 seconds. The server fetches from Bluesky and Mastodon if the per-platform debounce (30s) has expired, stores posts in DB, and updates the Redis cache. Pull-to-refresh reads from Redis/DB only — it never hits platform APIs directly.
 - **Deduplication:** Cross-posted content is deduplicated via SHA-256 hash of normalized text (stripped URLs, 5-min time window).
 - **Timeline:** Merged, deduplicated, cursor-paginated feed from both platforms. First page is cached in Redis (60s TTL).
-- **Mentions:** Bluesky notifications (replies, quotes, mentions) + Mastodon mentions merged into a single feed.
+- **Mentions:** Bluesky notifications (replies, quotes, mentions) + Mastodon mentions merged into a single feed. Same heartbeat/cache model as timeline.
+- **Reactions:** Likes, reposts, follows fetched server-side and cached (60s). Like/repost/reply actions POST to API routes which call the Bluesky agent server-side.
+- **Cross-posting:** New posts are sent to both Bluesky and Mastodon simultaneously. Images are compressed client-side (iterative JPEG quality reduction until under 950KB for Bluesky's 1MB limit). After posting, the heartbeat is force-triggered (busts all debounce and cache keys) then a full UI refresh reads the updated cache.
+- **Thread replies:** Posts store `thread_root_id`/`thread_root_cid` (from `record.reply.root` in the Bluesky feed). Replies pass these as the AT Protocol `root` ref so nested replies thread correctly in Bluesky.
 - **Identity resolution:** Heuristic scoring (bio cross-links, handle similarity, display name, verified domains) → LLM batch evaluation (Claude API) → auto-confirm ≥0.9, pending 0.5–0.9, rejected <0.5. Persons group linked identities across platforms.
-- **Reactions:** Likes, reposts, follows fetched server-side and cached (60s). Like/repost actions POST to API routes which call the Bluesky agent server-side.
 - **Rich text:** Bluesky facets rendered to HTML server-side; Mastodon HTML sanitized. URLs linkified.
 - **State preservation:** Timeline scroll position and feed cache stored in sessionStorage for instant back-navigation.
-- **PWA:** Installable as a home screen app via manifest.json.
+- **PWA:** Installable as a home screen app via manifest.json. Stuck fetches are aborted on `visibilitychange` to handle iOS PWA backgrounding.
 
 ## Bluesky OAuth Notes
 
@@ -147,6 +152,7 @@ public/
 - `ANTHROPIC_API_KEY` — for identity resolution LLM calls
 - `SESSION_SECRET` — 32+ char secret for iron-session cookie encryption
 - `APP_URL` — full origin URL (e.g. `http://127.0.0.1:3000` dev, `https://alpaca.blue` prod) — required for server-side Bluesky OAuth redirect URI
+- `REDIS_KEY_PREFIX` — prefix for all Redis keys (e.g. `dev:`) to isolate dev and prod on a shared instance
 
 ## Dev Preferences
 
