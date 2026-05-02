@@ -1684,10 +1684,14 @@ a.post-timestamp:hover {
   border-radius: 50%;
   border: 2px solid var(--color-bg, #fff);
   object-fit: cover;
+  display: block;
+}
+
+.reaction-card-avatars > * {
   margin-left: -6px;
 }
 
-.reaction-card-avatars .reaction-card-avatar:first-child {
+.reaction-card-avatars > *:first-child {
   margin-left: 0;
 }
 
