@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { posts, platformIdentities } from "@/db/schema";
 import { eq, lt, desc, and } from "drizzle-orm";
 import { requireSession, unauthorizedResponse } from "@/lib/session";
+import { fetchAndStoreAuthorPostsForIdentity } from "@/lib/posts";
 
 export async function GET(
   request: NextRequest,
@@ -33,6 +34,15 @@ export async function GET(
     const { searchParams } = new URL(request.url);
     const cursor = searchParams.get("cursor");
     const limit = Math.min(parseInt(searchParams.get("limit") || "50"), 100);
+
+    // Pull a fresh page directly from the platform before reading the DB.
+    // Reset the per-identity cursor on a fresh visit (no API cursor) so we
+    // start from the latest; otherwise advance through the author's history.
+    await fetchAndStoreAuthorPostsForIdentity(
+      userId,
+      { id: identity.id, platform: identity.platform, did: identity.did, handle: identity.handle },
+      { reset: !cursor },
+    ).catch(() => {});
 
     const conditions = [
       eq(posts.platformIdentityId, identityId),

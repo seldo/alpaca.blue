@@ -4,8 +4,11 @@ export type ReactionType = "like" | "repost" | "follow" | "quote";
 
 export interface Reactor {
   handle: string;
+  did?: string | null; // Bluesky DID, when known — used for lookup/create on click
   displayName?: string;
   avatarUrl?: string;
+  platformIdentityId?: number | null;
+  personId?: number | null;
 }
 
 export interface RawReaction {

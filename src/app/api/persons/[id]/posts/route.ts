@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { posts, platformIdentities, persons } from "@/db/schema";
 import { eq, lt, desc, inArray, and } from "drizzle-orm";
 import { requireSession, unauthorizedResponse } from "@/lib/session";
+import { fetchAndStoreAuthorPostsForIdentity } from "@/lib/posts";
 
 export async function GET(
   request: NextRequest,
@@ -50,6 +51,19 @@ export async function GET(
 
     const identityIds = identities.map((i) => i.id);
     const identityMap = new Map(identities.map((i) => [i.id, i]));
+
+    // Pull a fresh page from each platform before reading from the DB, so the
+    // person's profile shows everything they've posted, not just whatever
+    // happens to have landed via our own timeline.
+    await Promise.allSettled(
+      identities.map((i) =>
+        fetchAndStoreAuthorPostsForIdentity(
+          userId,
+          { id: i.id, platform: i.platform, did: i.did, handle: i.handle },
+          { reset: !cursor },
+        )
+      )
+    );
 
     const conditions = [inArray(posts.platformIdentityId, identityIds)];
     if (cursor) {

@@ -1408,3 +1408,155 @@ export async function fetchBlueskyReactions(userId: number): Promise<RawReaction
   await redis.set(cacheKey, reactions, { ex: TTL.blueskyReactions }).catch(() => {});
   return reactions;
 }
+
+// ── Fetch & store posts for any author (used by /persons and /identities pages) ──
+
+export async function fetchAndStoreBlueskyAuthorPosts(
+  userId: number,
+  authorDid: string,
+  cursor?: string,
+): Promise<{ stored: number; cursor: string | null }> {
+  const agent = await getServerBlueskyAgent(userId);
+  if (!agent) return { stored: 0, cursor: null };
+
+  const response = await agent.getAuthorFeed({ actor: authorDid, limit: 40, cursor });
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const blueskyPosts = response.data.feed.map((item) => mapBlueskyFeedItem(item as any));
+  const result = await storeBlueskyPosts(blueskyPosts, userId);
+  return { stored: result.stored, cursor: response.data.cursor || null };
+}
+
+export async function fetchAndStoreMastodonAuthorPosts(
+  userId: number,
+  identityHandle: string,
+  maxId?: string,
+): Promise<{ stored: number; cursor: string | null }> {
+  const [account] = await db
+    .select()
+    .from(connectedAccounts)
+    .where(and(eq(connectedAccounts.userId, userId), eq(connectedAccounts.platform, "mastodon")))
+    .limit(1);
+  if (!account?.accessToken || !account.instanceUrl) return { stored: 0, cursor: null };
+
+  const instanceUrl = account.instanceUrl;
+
+  // Resolve the @user@instance handle to a remote-account ID on our own instance.
+  const acct = identityHandle.replace(/^@/, "");
+  const lookupRes = await fetch(
+    `${instanceUrl}/api/v1/accounts/lookup?acct=${encodeURIComponent(acct)}`,
+    { headers: { Authorization: `Bearer ${account.accessToken}` } },
+  );
+  if (!lookupRes.ok) return { stored: 0, cursor: null };
+  const accountData = await lookupRes.json();
+  const accountId = accountData.id as string | undefined;
+  if (!accountId) return { stored: 0, cursor: null };
+
+  const url = new URL(`${instanceUrl}/api/v1/accounts/${accountId}/statuses`);
+  url.searchParams.set("limit", "40");
+  if (maxId) url.searchParams.set("max_id", maxId);
+
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${account.accessToken}` },
+  });
+  if (!response.ok) return { stored: 0, cursor: null };
+
+  const statuses: MastodonStatus[] = await response.json();
+
+  const [identity] = await db
+    .select()
+    .from(platformIdentities)
+    .where(and(
+      eq(platformIdentities.userId, userId),
+      eq(platformIdentities.platform, "mastodon"),
+      eq(platformIdentities.handle, identityHandle),
+    ))
+    .limit(1);
+  if (!identity) return { stored: 0, cursor: null };
+
+  const rows = [];
+  for (const status of statuses) {
+    if (status.reblog) continue; // skip reblogs of others — we may not have their identity row
+
+    const plainContent = stripHtmlTags(status.content);
+    const media = status.media_attachments.map((m) => ({
+      type: m.type,
+      url: m.url,
+      alt: m.description || "",
+    }));
+
+    rows.push({
+      userId,
+      isTimeline: false,
+      isMention: false,
+      platformIdentityId: identity.id,
+      platform: "mastodon" as const,
+      platformPostId: status.id,
+      postUrl: status.url || null,
+      content: plainContent,
+      contentHtml: status.content,
+      media: media.length > 0 ? media : null,
+      replyToId: status.in_reply_to_id || null,
+      repostOfId: null,
+      likeCount: status.favourites_count || 0,
+      repostCount: status.reblogs_count || 0,
+      replyCount: status.replies_count || 0,
+      postedAt: new Date(status.created_at),
+      dedupeHash: computeDedupeHash(plainContent),
+    });
+  }
+
+  if (rows.length > 0) {
+    await db.insert(posts).values(rows).onDuplicateKeyUpdate({
+      set: {
+        content: sql`values(${posts.content})`,
+        contentHtml: sql`values(${posts.contentHtml})`,
+        postUrl: sql`values(${posts.postUrl})`,
+        media: sql`values(${posts.media})`,
+        likeCount: sql`values(${posts.likeCount})`,
+        repostCount: sql`values(${posts.repostCount})`,
+        replyCount: sql`values(${posts.replyCount})`,
+        fetchedAt: new Date(),
+      },
+    });
+  }
+
+  // Mastodon paginates via max_id — use the oldest status id from this page.
+  const nextCursor = statuses.length > 0 ? statuses[statuses.length - 1].id : null;
+  return { stored: rows.length, cursor: nextCursor };
+}
+
+/**
+ * Fetch the next page of an identity's posts from its platform and store them.
+ * Tracks a per-identity cursor in Redis so that successive calls advance through
+ * the author's history. Pass `reset: true` (e.g. on a fresh page visit) to start
+ * from the top of their feed.
+ */
+export async function fetchAndStoreAuthorPostsForIdentity(
+  userId: number,
+  identity: { id: number; platform: string; did: string | null; handle: string },
+  options: { reset?: boolean } = {},
+): Promise<{ stored: number; exhausted: boolean }> {
+  const cursorKey = keys.authorFeedCursor(userId, identity.id);
+  if (options.reset) {
+    await redis.del(cursorKey).catch(() => {});
+  }
+  const stored = await redis.get<string>(cursorKey).catch(() => null);
+  // The sentinel "__exhausted__" means we've reached the end of this feed.
+  if (stored === "__exhausted__") return { stored: 0, exhausted: true };
+  const cursor = stored || undefined;
+
+  let result: { stored: number; cursor: string | null } = { stored: 0, cursor: null };
+  if (identity.platform === "bluesky" && identity.did) {
+    result = await fetchAndStoreBlueskyAuthorPosts(userId, identity.did, cursor);
+  } else if (identity.platform === "mastodon") {
+    result = await fetchAndStoreMastodonAuthorPosts(userId, identity.handle, cursor);
+  }
+
+  if (result.cursor) {
+    await redis.set(cursorKey, result.cursor, { ex: TTL.authorFeedCursor }).catch(() => {});
+    return { stored: result.stored, exhausted: false };
+  }
+  // No cursor returned — we've hit the end of this author's feed.
+  await redis.set(cursorKey, "__exhausted__", { ex: TTL.authorFeedCursor }).catch(() => {});
+  return { stored: result.stored, exhausted: true };
+}

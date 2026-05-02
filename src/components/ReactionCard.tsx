@@ -3,18 +3,23 @@
 import { useRouter } from "next/navigation";
 import type { ReactionGroup, Reactor } from "@/lib/reactions";
 
-function reactorProfileUrl(reactor: Reactor, platform: ReactionGroup["platform"]): string | null {
-  // Mastodon handles look like "@user@instance" or "user@instance".
-  // Everything else is treated as a Bluesky handle.
+function reactorProfileUrl(reactor: Reactor, platform: ReactionGroup["platform"]): string {
+  // Direct link when we already know the in-app identity for this reactor.
+  if (reactor.personId) return `/persons/${reactor.personId}`;
+  if (reactor.platformIdentityId) return `/identities/${reactor.platformIdentityId}`;
+
+  // Otherwise route through the lookup-or-create endpoint, which inserts
+  // a platformIdentities row on demand and redirects to the canonical page.
   const isMastodon =
     platform === "mastodon" || (platform === "both" && reactor.handle.includes("@"));
-  if (isMastodon) {
-    const m = reactor.handle.match(/^@?([^@]+)@(.+)$/);
-    if (!m) return null;
-    return `https://${m[2]}/@${m[1]}`;
-  }
-  const handle = reactor.handle.replace(/^@/, "");
-  return `https://bsky.app/profile/${handle}`;
+  const params = new URLSearchParams({
+    platform: isMastodon ? "mastodon" : "bluesky",
+    handle: reactor.handle,
+  });
+  if (!isMastodon && reactor.did) params.set("did", reactor.did);
+  if (reactor.displayName) params.set("displayName", reactor.displayName);
+  if (reactor.avatarUrl) params.set("avatarUrl", reactor.avatarUrl);
+  return `/identities/lookup?${params.toString()}`;
 }
 
 function relativeTime(iso: string): string {
@@ -109,23 +114,20 @@ export function ReactionCard({ group }: { group: ReactionGroup }) {
           </span>
           <div className="reaction-card-avatars">
             {group.reactors.slice(0, 5).map((r, i) => {
-              const profileUrl = reactorProfileUrl(r, group.platform);
               const img = r.avatarUrl ? (
                 <img src={r.avatarUrl} alt={r.displayName || r.handle} className="reaction-card-avatar" />
               ) : (
                 <div className="reaction-card-avatar reaction-card-avatar-placeholder" />
               );
-              return profileUrl ? (
+              return (
                 <a
                   key={i}
-                  href={profileUrl}
+                  href={reactorProfileUrl(r, group.platform)}
                   onClick={(e) => e.stopPropagation()}
                   title={r.displayName || r.handle}
                 >
                   {img}
                 </a>
-              ) : (
-                <span key={i}>{img}</span>
               );
             })}
           </div>

@@ -21,6 +21,8 @@ export const keys = {
     `${KEY_PREFIX}mastodon:reactions:${userId}`,
   blueskyReactions: (userId: number) =>
     `${KEY_PREFIX}bluesky:reactions:${userId}`,
+  authorFeedCursor: (userId: number, identityId: number) =>
+    `${KEY_PREFIX}author:cursor:${userId}:${identityId}`,
 };
 
 // TTLs (seconds)
@@ -30,4 +32,5 @@ export const TTL = {
   timelineCache: 60,
   mastodonReactions: 60,
   blueskyReactions: 60,
+  authorFeedCursor: 3600,
 };
