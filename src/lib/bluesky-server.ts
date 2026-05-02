@@ -1,6 +1,5 @@
 import { NodeOAuthClient } from "@atproto/oauth-client-node";
 import type { NodeSavedState, NodeSavedSession } from "@atproto/oauth-client-node";
-import { requestLocalLock } from "@atproto/oauth-client";
 import { Agent } from "@atproto/api";
 import { redis, KEY_PREFIX } from "./redis";
 import { db } from "@/db";
@@ -35,6 +34,34 @@ const sessionStore = {
     await redis.del(`${KEY_PREFIX}bluesky:session:${key}`).catch(() => {});
   },
 };
+
+// ── Distributed Redis lock (replaces requestLocalLock for serverless) ─────
+// Bluesky uses one-time-use refresh tokens. requestLocalLock only prevents
+// races within a single process, but Netlify runs each request in its own
+// serverless instance. Without a distributed lock, concurrent requests from
+// two devices can both try to consume the same refresh token — one succeeds,
+// the other gets "token already used", and the library deletes the session,
+// forcing re-auth.
+
+async function requestRedisLock<T>(name: string, fn: () => Promise<T>): Promise<T> {
+  const lockKey = `${KEY_PREFIX}lock:${name}`;
+  const lockId = Math.random().toString(36).slice(2);
+  const deadline = Date.now() + 15_000; // wait up to 15s to acquire
+
+  while (Date.now() < deadline) {
+    const acquired = await redis.set(lockKey, lockId, { nx: true, ex: 30 }).catch(() => null);
+    if (acquired) {
+      try {
+        return await fn();
+      } finally {
+        const current = await redis.get<string>(lockKey).catch(() => null);
+        if (current === lockId) await redis.del(lockKey).catch(() => {});
+      }
+    }
+    await new Promise((r) => setTimeout(r, 200 + Math.random() * 100));
+  }
+  throw new Error(`[bluesky-server] Could not acquire distributed lock: ${name}`);
+}
 
 // ── Singleton client ──────────────────────────────────────────────────────
 
@@ -101,7 +128,7 @@ async function createClient(): Promise<NodeOAuthClient> {
     handleResolver: "https://bsky.social",
     stateStore,
     sessionStore,
-    requestLock: requestLocalLock,
+    requestLock: requestRedisLock,
   });
 }
 
