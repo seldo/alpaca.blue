@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useEffect } from "react";
+import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 
 function ImageModal({
@@ -70,6 +70,47 @@ interface MediaItem {
   type: string;
   url: string;
   alt: string;
+  thumbnailUrl?: string;
+}
+
+function VideoPlayer({ src, poster, alt }: { src: string; poster?: string; alt?: string }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const isHls = /\.m3u8(\?|$)/i.test(src);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !isHls) return;
+    if (video.canPlayType("application/vnd.apple.mpegurl")) {
+      video.src = src;
+      return;
+    }
+    let hls: import("hls.js").default | null = null;
+    let cancelled = false;
+    import("hls.js").then(({ default: Hls }) => {
+      if (cancelled || !Hls.isSupported()) return;
+      hls = new Hls();
+      hls.loadSource(src);
+      hls.attachMedia(video);
+    });
+    return () => {
+      cancelled = true;
+      hls?.destroy();
+    };
+  }, [src, isHls]);
+
+  return (
+    <video
+      ref={videoRef}
+      className="post-media-video"
+      controls
+      playsInline
+      preload="metadata"
+      poster={poster}
+      src={isHls ? undefined : src}
+      aria-label={alt || undefined}
+      onClick={(e) => e.stopPropagation()}
+    />
+  );
 }
 
 interface PostData {
@@ -91,7 +132,7 @@ interface PostData {
     authorDisplayName?: string;
     authorAvatar?: string;
     text: string;
-    media?: Array<{ type: string; url: string; alt: string }>;
+    media?: Array<{ type: string; url: string; alt: string; thumbnailUrl?: string }>;
     postedAt?: string;
   } | null;
   likeCount: number | null;
@@ -470,6 +511,7 @@ export function PostCard({ post }: { post: PostData }) {
       target.closest("a") ||
       target.closest("button") ||
       target.tagName === "IMG" ||
+      target.tagName === "VIDEO" ||
       target.closest(".post-media") ||
       target.closest(".post-reply-composer") ||
       target.closest(".post-quote-composer") ||
@@ -584,26 +626,32 @@ export function PostCard({ post }: { post: PostData }) {
         ) : null}
       </div>
 
-      {mediaItems.length > 0 && (
-        <div
-          className={`post-media ${mediaItems.length === 1 ? "single" : "grid"}`}
-        >
-          {mediaItems.map((m, i) => (
-            <img
-              key={i}
-              src={m.url}
-              alt={m.alt || ""}
-              className="post-media-img post-media-img-clickable"
-              loading="lazy"
-              onClick={(e) => openImageModal(
-                mediaItems.map((mi) => ({ url: mi.url, alt: mi.alt || "" })),
-                i,
-                e
-              )}
-            />
-          ))}
-        </div>
-      )}
+      {mediaItems.length > 0 && (() => {
+        const imageItems = mediaItems
+          .map((m, idx) => ({ m, idx }))
+          .filter(({ m }) => m.type !== "video" && m.type !== "gifv");
+        const imageList = imageItems.map(({ m }) => ({ url: m.url, alt: m.alt || "" }));
+        return (
+          <div className={`post-media ${mediaItems.length === 1 ? "single" : "grid"}`}>
+            {mediaItems.map((m, i) => {
+              if (m.type === "video" || m.type === "gifv") {
+                return <VideoPlayer key={i} src={m.url} poster={m.thumbnailUrl} alt={m.alt} />;
+              }
+              const imgIndex = imageItems.findIndex((it) => it.idx === i);
+              return (
+                <img
+                  key={i}
+                  src={m.url}
+                  alt={m.alt || ""}
+                  className="post-media-img post-media-img-clickable"
+                  loading="lazy"
+                  onClick={(e) => openImageModal(imageList, imgIndex, e)}
+                />
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {post.linkCard && (
         /\.gif(\?|$)/i.test(post.linkCard.url) ? (
@@ -689,24 +737,33 @@ export function PostCard({ post }: { post: PostData }) {
                 <div dangerouslySetInnerHTML={{ __html: linkifyText(qp.text) }} />
               </div>
             )}
-            {qp.media && qp.media.length > 0 && (
-              <div className={`post-media ${qp.media.length === 1 ? "single" : "grid"}`}>
-                {qp.media.map((m, i) => (
-                  <img
-                    key={i}
-                    src={m.url}
-                    alt={m.alt || ""}
-                    className="post-media-img post-media-img-clickable"
-                    loading="lazy"
-                    onClick={(e) => openImageModal(
-                      qp.media!.map((mi) => ({ url: mi.url, alt: mi.alt || "" })),
-                      i,
-                      e
-                    )}
-                  />
-                ))}
-              </div>
-            )}
+            {qp.media && qp.media.length > 0 && (() => {
+              const qpMedia = qp.media;
+              const imageItems = qpMedia
+                .map((m, idx) => ({ m, idx }))
+                .filter(({ m }) => m.type !== "video" && m.type !== "gifv");
+              const imageList = imageItems.map(({ m }) => ({ url: m.url, alt: m.alt || "" }));
+              return (
+                <div className={`post-media ${qpMedia.length === 1 ? "single" : "grid"}`}>
+                  {qpMedia.map((m, i) => {
+                    if (m.type === "video" || m.type === "gifv") {
+                      return <VideoPlayer key={i} src={m.url} poster={m.thumbnailUrl} alt={m.alt} />;
+                    }
+                    const imgIndex = imageItems.findIndex((it) => it.idx === i);
+                    return (
+                      <img
+                        key={i}
+                        src={m.url}
+                        alt={m.alt || ""}
+                        className="post-media-img post-media-img-clickable"
+                        loading="lazy"
+                        onClick={(e) => openImageModal(imageList, imgIndex, e)}
+                      />
+                    );
+                  })}
+                </div>
+              );
+            })()}
           </div>
         );
       })()}

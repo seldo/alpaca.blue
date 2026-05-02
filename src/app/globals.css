@@ -1495,6 +1495,19 @@ a.post-timestamp:hover {
   cursor: pointer;
 }
 
+.post-media-video {
+  width: 100%;
+  display: block;
+  max-height: 400px;
+  background: #000;
+  border-radius: 8px;
+}
+
+.post-media.grid .post-media-video {
+  max-height: 300px;
+  border-radius: 0;
+}
+
 /* Image modal */
 .image-modal-overlay {
   position: fixed;

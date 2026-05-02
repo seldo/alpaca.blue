@@ -19,7 +19,7 @@ export interface QuotedPostData {
   authorDisplayName?: string;
   authorAvatar?: string;
   text: string;
-  media?: Array<{ type: string; url: string; alt: string }>;
+  media?: Array<{ type: string; url: string; alt: string; thumbnailUrl?: string }>;
   postedAt?: string;
 }
 
@@ -48,7 +48,7 @@ export interface BlueskyPostData {
   threadRootCid?: string;
   repostOfUri?: string;
   repostedByHandle?: string;
-  images?: Array<{ url: string; alt: string }>;
+  media?: Array<{ type: string; url: string; alt: string; thumbnailUrl?: string }>;
   quotedPost?: QuotedPostData;
   linkCard?: LinkCardData;
   isMention?: boolean;
@@ -75,6 +75,7 @@ interface MastodonStatus {
   media_attachments: Array<{
     type: string;
     url: string;
+    preview_url?: string | null;
     description: string | null;
   }>;
 }
@@ -187,7 +188,7 @@ export async function storeBlueskyPosts(
     const identity = identityMap.get(post.authorDid);
     if (!identity) continue; // Skip timeline posts from unknown authors
 
-    const media = post.images?.map((img) => ({ type: "image", url: img.url, alt: img.alt }));
+    const media = post.media;
     rows.push({
       userId,
       isTimeline: !post.isMention,
@@ -315,6 +316,7 @@ export async function fetchAndStoreMastodonPosts(
       type: m.type,
       url: m.url,
       alt: m.description || "",
+      thumbnailUrl: m.preview_url || undefined,
     }));
 
     rows.push({
@@ -568,7 +570,7 @@ export async function fetchAndStoreOwnMastodonPosts(
   const rows = statuses.map((status) => {
     const actual = status.reblog || status;
     const plainContent = stripHtmlTags(actual.content);
-    const media = actual.media_attachments.map((m) => ({ type: m.type, url: m.url, alt: m.description || "" }));
+    const media = actual.media_attachments.map((m) => ({ type: m.type, url: m.url, alt: m.description || "", thumbnailUrl: m.preview_url || undefined }));
     return {
       userId,
       isTimeline: true,
@@ -666,15 +668,42 @@ export async function fetchMastodonReactions(
     }
   }
 
+  // Batch-lookup in-app platform identities for reactors so the UI can link to /persons or /identities.
+  // Mastodon handles are stored as @user@instance — build that for every reactor first.
+  const reactorHandles = [
+    ...new Set(
+      filtered.map((n) =>
+        n.account.acct.includes("@") ? `@${n.account.acct}` : `@${n.account.acct}@${instanceHost}`
+      )
+    ),
+  ];
+  const reactorIdentityByHandle = new Map<string, { id: number; personId: number | null }>();
+  if (reactorHandles.length > 0) {
+    const rows = await db
+      .select({ id: platformIdentities.id, handle: platformIdentities.handle, personId: platformIdentities.personId })
+      .from(platformIdentities)
+      .where(and(
+        eq(platformIdentities.userId, userId),
+        eq(platformIdentities.platform, "mastodon"),
+        inArray(platformIdentities.handle, reactorHandles)
+      ));
+    for (const row of rows) {
+      reactorIdentityByHandle.set(row.handle, { id: row.id, personId: row.personId });
+    }
+  }
+
   const reactions = filtered.map((n) => {
       const handle = n.account.acct.includes("@")
         ? `@${n.account.acct}`
         : `@${n.account.acct}@${instanceHost}`;
 
+      const identity = reactorIdentityByHandle.get(handle);
       const reactor = {
         handle,
         displayName: n.account.display_name || n.account.username,
         avatarUrl: n.account.avatar,
+        platformIdentityId: identity?.id ?? null,
+        personId: identity?.personId ?? null,
       };
 
       const internalId = n.status?.id ? internalIdMap.get(n.status.id) : undefined;
@@ -1070,27 +1099,29 @@ function facetsToHtml(text: string, facets?: BlueskyFacet[]): string {
 
 interface BlueskyImageView { thumb: string; alt: string; fullsize: string; }
 
+type ExtractedMedia = { type: string; url: string; alt: string; thumbnailUrl?: string };
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function extractBlueskyImages(embed: any): Array<{ url: string; alt: string }> {
+function extractBlueskyMedia(embed: any): ExtractedMedia[] {
   if (!embed) return [];
-  const images: Array<{ url: string; alt: string }> = [];
+  const items: ExtractedMedia[] = [];
   if (embed.images && Array.isArray(embed.images)) {
     for (const img of embed.images as BlueskyImageView[]) {
-      images.push({ url: img.fullsize || img.thumb, alt: img.alt || "" });
+      items.push({ type: "image", url: img.fullsize || img.thumb, alt: img.alt || "" });
     }
   }
   if (embed.media?.images && Array.isArray(embed.media.images)) {
     for (const img of embed.media.images as BlueskyImageView[]) {
-      images.push({ url: img.fullsize || img.thumb, alt: img.alt || "" });
+      items.push({ type: "image", url: img.fullsize || img.thumb, alt: img.alt || "" });
     }
   }
-  if (embed.playlist && embed.thumbnail) {
-    images.push({ url: embed.thumbnail, alt: "Video thumbnail" });
+  if (embed.playlist) {
+    items.push({ type: "video", url: embed.playlist, alt: embed.alt || "", thumbnailUrl: embed.thumbnail || undefined });
   }
-  if (embed.media?.playlist && embed.media?.thumbnail) {
-    images.push({ url: embed.media.thumbnail, alt: "Video thumbnail" });
+  if (embed.media?.playlist) {
+    items.push({ type: "video", url: embed.media.playlist, alt: embed.media.alt || "", thumbnailUrl: embed.media.thumbnail || undefined });
   }
-  return images;
+  return items;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -1108,9 +1139,9 @@ function extractQuotedPost(embed: any): QuotedPostData | undefined {
     postedAt: record.indexedAt || (record.value as { createdAt?: string })?.createdAt,
   };
   if (record.embeds && Array.isArray(record.embeds) && record.embeds.length > 0) {
-    const embeddedImages = extractBlueskyImages(record.embeds[0]);
-    if (embeddedImages.length > 0) {
-      quoted.media = embeddedImages.map((img) => ({ type: "image", url: img.url, alt: img.alt }));
+    const embeddedMedia = extractBlueskyMedia(record.embeds[0]);
+    if (embeddedMedia.length > 0) {
+      quoted.media = embeddedMedia;
     }
   }
   return quoted;
@@ -1160,7 +1191,7 @@ function mapBlueskyFeedItem(item: { post: Record<string, unknown>; reason?: unkn
     threadRootUri: post.record?.reply?.root?.uri || undefined,
     threadRootCid: post.record?.reply?.root?.cid || undefined,
     repostOfUri: item.reason ? post.uri : undefined,
-    images: extractBlueskyImages(post.embed),
+    media: extractBlueskyMedia(post.embed),
     quotedPost: extractQuotedPost(post.embed),
     linkCard: extractLinkCard(post.embed),
     isMention,
@@ -1256,7 +1287,7 @@ export async function fetchAndStoreBlueskyMentions(userId: number): Promise<{ st
       createdAt: n.indexedAt,
       replyToUri: record?.reply?.parent?.uri || undefined,
       isMention: true,
-      images: extractBlueskyImages(hydrated?.embed),
+      media: extractBlueskyMedia(hydrated?.embed),
       quotedPost: extractQuotedPost(hydrated?.embed),
     };
   });
@@ -1326,6 +1357,23 @@ export async function fetchBlueskyReactions(userId: number): Promise<RawReaction
     }
   }
 
+  // Batch-lookup in-app platform identities for reactors so the UI can link to /persons or /identities.
+  const reactorDids = [...new Set(reactionNotifs.map((n) => n.author.did).filter(Boolean))];
+  const reactorIdentityByDid = new Map<string, { id: number; personId: number | null }>();
+  if (reactorDids.length > 0) {
+    const rows = await db
+      .select({ id: platformIdentities.id, did: platformIdentities.did, personId: platformIdentities.personId })
+      .from(platformIdentities)
+      .where(and(
+        eq(platformIdentities.userId, userId),
+        eq(platformIdentities.platform, "bluesky"),
+        inArray(platformIdentities.did, reactorDids)
+      ));
+    for (const row of rows) {
+      if (row.did) reactorIdentityByDid.set(row.did, { id: row.id, personId: row.personId });
+    }
+  }
+
   const reactions: RawReaction[] = reactionNotifs.map((n) => {
     const reactionType =
       n.reason === "like" ? "like" as const :
@@ -1337,6 +1385,7 @@ export async function fetchBlueskyReactions(userId: number): Promise<RawReaction
     const subjectText = subjectId ? (subjectTextMap.get(subjectId) ?? null) : null;
     const internalId = subjectId ? subjectInternalIdMap.get(subjectId) : undefined;
     const subjectUrl = internalId ? `/posts/${internalId}` : null;
+    const identity = reactorIdentityByDid.get(n.author.did);
 
     return {
       platform: "bluesky" as const,
@@ -1346,8 +1395,11 @@ export async function fetchBlueskyReactions(userId: number): Promise<RawReaction
       subjectUrl,
       reactor: {
         handle: n.author.handle,
+        did: n.author.did,
         displayName: n.author.displayName || n.author.handle,
         avatarUrl: n.author.avatar || "",
+        platformIdentityId: identity?.id ?? null,
+        personId: identity?.personId ?? null,
       },
       reactedAt: n.indexedAt,
     };
