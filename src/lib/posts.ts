@@ -750,10 +750,11 @@ export async function queryPostsByIdentities(
     .where(inArray(platformIdentities.id, identityIds));
   const identityMap = new Map(identityRows.map((i) => [i.id, i]));
 
+  const fetchLimit = Math.ceil(limit * 1.5);
   const rows = await db.select().from(posts)
     .where(and(...conditions))
     .orderBy(desc(posts.postedAt))
-    .limit(limit);
+    .limit(fetchLimit);
 
   // Batch-resolve parent post authors for replies
   const replyToIds = [...new Set(rows.map((p) => p.replyToId).filter(Boolean) as string[])];
@@ -794,10 +795,30 @@ export async function queryPostsByIdentities(
     }
   }
 
-  const result: ProfilePost[] = rows.map((post) => {
+  const seen = new Map<string, number>();
+  const result: ProfilePost[] = [];
+
+  for (const post of rows) {
+    const hash = post.dedupeHash;
+    if (hash && seen.has(hash)) {
+      const existingIdx = seen.get(hash)!;
+      const alreadyListed = result[existingIdx].alsoPostedOn.some((p) => p.platform === post.platform);
+      if (!alreadyListed) {
+        result[existingIdx].alsoPostedOn.push({
+          platform: post.platform,
+          postUrl: post.postUrl || null,
+          platformPostId: post.platformPostId,
+          platformPostCid: post.platformPostCid || null,
+          threadRootId: post.threadRootId || null,
+          threadRootCid: post.threadRootCid || null,
+        });
+      }
+      continue;
+    }
+
     const identity = identityMap.get(post.platformIdentityId);
     const replyToAuthor = post.replyToId ? (replyToAuthorMap.get(post.replyToId) ?? null) : null;
-    return {
+    const entry: ProfilePost = {
       id: post.id,
       platform: post.platform,
       platformPostId: post.platformPostId,
@@ -821,7 +842,12 @@ export async function queryPostsByIdentities(
       alsoPostedOn: [],
       replyToAuthor,
     };
-  });
+
+    if (hash) seen.set(hash, result.length);
+    result.push(entry);
+
+    if (result.length === limit) break;
+  }
 
   const nextCursor = result.length === limit ? result[result.length - 1].postedAt : null;
   return { posts: result, nextCursor };

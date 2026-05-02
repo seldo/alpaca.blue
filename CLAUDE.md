@@ -28,6 +28,7 @@ src/
     login/page.tsx                     # Bluesky OAuth login page
     timeline/page.tsx                  # Unified timeline feed
     mentions/page.tsx                  # Mentions feed (replies + @-mentions)
+    profile/page.tsx                   # Own posts feed (deduplicated cross-posts)
     identities/page.tsx                # Identity resolution management
     persons/[id]/page.tsx              # Person view (all posts across platforms)
     posts/[id]/page.tsx                # Individual post detail page
@@ -44,9 +45,11 @@ src/
       bluesky/
         like/route.ts                  # POST {uri, cid} → agent.like()
         repost/route.ts                # POST {uri, cid} → agent.repost()
-        post/route.ts                  # POST {text, replyTo?, quote?, images?} → agent.post()
+        post/route.ts                  # POST {text, replyTo?, replyRoot?, quote?, images?} → RichText.detectFacets → agent.post()
         upload-blob/route.ts           # POST FormData{file} → agent.uploadBlob() → {blob}
         author-feed/route.ts           # GET ?cursor= → agent.getAuthorFeed()
+      mastodon/
+        reply/route.ts                 # POST {statusId, content} → reply to Mastodon status by ID
       graph/
         import/route.ts               # Import follows from either platform (server-side for both)
         identities/
@@ -66,12 +69,14 @@ src/
         fetch/route.ts                 # POST — fetches reactions from both platforms server-side (cached 60s)
       timeline/route.ts               # GET merged deduplicated timeline (supports ?type=mentions); reads from Redis/DB only
       persons/[id]/posts/route.ts     # GET posts for a specific person
+      profile/posts/route.ts          # POST fetch+store own posts from all platforms; GET cursor pagination
   components/
     AppHeader.tsx                      # App layout: sidebar nav + mobile bottom bar
     BlueskyConnect.tsx                 # Bluesky OAuth connect form (unused — login handles this)
     MastodonConnect.tsx                # Mastodon instance URL / handle form
     ConnectedAccount.tsx               # Account row with import/reconnect buttons
-    PostCard.tsx                       # Post card with images, quotes, links, image modal
+    PostCard.tsx                       # Post card with images, quotes, links, image modal, reply/repost/like
+    CreatePost.tsx                     # Compose UI: text + images (with ALT text), cross-posts to both platforms
     PersonCard.tsx                     # Person card with linked identities
     SuggestionCard.tsx                 # Identity match suggestion card
   lib/
@@ -104,10 +109,12 @@ public/
 - **Timeline:** Merged, deduplicated, cursor-paginated feed from both platforms. First page is cached in Redis (60s TTL).
 - **Mentions:** Bluesky notifications (replies, quotes, mentions) + Mastodon mentions merged into a single feed. Same heartbeat/cache model as timeline.
 - **Reactions:** Likes, reposts, follows fetched server-side and cached (60s). Like/repost/reply actions POST to API routes which call the Bluesky agent server-side.
-- **Cross-posting:** New posts are sent to both Bluesky and Mastodon simultaneously. Images are compressed client-side (iterative JPEG quality reduction until under 950KB for Bluesky's 1MB limit). After posting, the heartbeat is force-triggered (busts all debounce and cache keys) then a full UI refresh reads the updated cache.
-- **Thread replies:** Posts store `thread_root_id`/`thread_root_cid` (from `record.reply.root` in the Bluesky feed). Replies pass these as the AT Protocol `root` ref so nested replies thread correctly in Bluesky.
+- **Cross-posting:** New posts are sent to both Bluesky and Mastodon simultaneously. Images are compressed client-side (iterative JPEG quality reduction until under 950KB for Bluesky's 1MB limit) and ALT text is captured per image. After posting, the heartbeat is force-triggered (busts all debounce and cache keys) then a full UI refresh reads the updated cache.
+- **Cross-platform replies:** When replying to a post that appears on both platforms (`alsoPostedOn`), the reply is sent to both platforms simultaneously via `Promise.allSettled`. Enables cross-platform threads.
+- **Thread replies:** Posts store `thread_root_id`/`thread_root_cid` (from `record.reply.root` in the Bluesky feed). Replies pass these as the AT Protocol `root` ref so nested replies thread correctly in Bluesky. The `alsoPostedOn` array also carries `platformPostId`/`platformPostCid`/`threadRootId`/`threadRootCid` for the same reason.
+- **Profile feed:** The user's own posts from both platforms, deduplicated the same way as the timeline. Cross-posts collapsed into one entry with `alsoPostedOn`.
 - **Identity resolution:** Heuristic scoring (bio cross-links, handle similarity, display name, verified domains) → LLM batch evaluation (Claude API) → auto-confirm ≥0.9, pending 0.5–0.9, rejected <0.5. Persons group linked identities across platforms.
-- **Rich text:** Bluesky facets rendered to HTML server-side; Mastodon HTML sanitized. URLs linkified.
+- **Rich text:** When posting to Bluesky, `RichText.detectFacets(agent)` auto-detects URLs (including bare domains), @-mentions, and #hashtags and generates the `facets` array. Stored Bluesky posts have facets rendered to HTML server-side. Mastodon handles linkification server-side — plain text is sufficient.
 - **State preservation:** Timeline scroll position and feed cache stored in sessionStorage for instant back-navigation.
 - **PWA:** Installable as a home screen app via manifest.json. Stuck fetches are aborted on `visibilitychange` to handle iOS PWA backgrounding.
 
