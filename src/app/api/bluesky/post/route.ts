@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { RichText } from "@atproto/api";
 import { getServerBlueskyAgent } from "@/lib/bluesky-server";
+import { buildBlueskyLinkCard } from "@/lib/link-preview";
 import { requireSession, unauthorizedResponse } from "@/lib/session";
 
 interface BlobRef {
@@ -51,6 +52,26 @@ export async function POST(request: NextRequest) {
       $type: "app.bsky.embed.record",
       record: { uri: quote.uri, cid: quote.cid },
     };
+  } else {
+    // No images or quote — try to attach a link card for the first URL.
+    // Bluesky allows only one embed per post, so this is mutually exclusive.
+    let linkUri: string | undefined;
+    for (const facet of rt.facets ?? []) {
+      for (const feature of facet.features) {
+        const f = feature as { $type: string; uri?: string };
+        if (f.$type === "app.bsky.richtext.facet#link" && typeof f.uri === "string") {
+          linkUri = f.uri;
+          break;
+        }
+      }
+      if (linkUri) break;
+    }
+    if (linkUri) {
+      const card = await buildBlueskyLinkCard(agent, linkUri);
+      if (card) {
+        postParams.embed = { $type: "app.bsky.embed.external", external: card };
+      }
+    }
   }
 
   const result = await agent.post(postParams);
