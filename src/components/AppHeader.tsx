@@ -12,11 +12,26 @@ interface UserInfo {
   needsReauth?: boolean;
 }
 
+function getScreenTitle(pathname: string): string {
+  if (pathname === "/profile") return "Profile";
+  if (pathname === "/timeline") return "Timeline";
+  if (pathname.startsWith("/posts/")) return "Post";
+  if (pathname === "/mentions") return "Mentions";
+  if (pathname === "/identities") return "Identities";
+  if (pathname.startsWith("/identities/")) return "Identity";
+  if (pathname.startsWith("/persons/")) return "Person";
+  if (pathname === "/settings") return "Settings";
+  if (pathname === "/") return "Home";
+  return "alpaca.blue";
+}
+
 export function AppLayout({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserInfo | null>(null);
   const [composeOpen, setComposeOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
+  const screenTitle = getScreenTitle(pathname);
 
   useEffect(() => {
     fetch("/api/auth/me")
@@ -24,6 +39,11 @@ export function AppLayout({ children }: { children: ReactNode }) {
       .then((data) => setUser(data))
       .catch(() => {});
   }, []);
+
+  // Close drawer on route change
+  useEffect(() => {
+    setDrawerOpen(false);
+  }, [pathname]);
 
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -136,6 +156,66 @@ export function AppLayout({ children }: { children: ReactNode }) {
           </button>
         </div>
       </aside>
+      <header className="app-topbar">
+        <button
+          className="app-topbar-btn"
+          onClick={() => setDrawerOpen(true)}
+          aria-label="Open menu"
+        >
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="3" y1="6" x2="21" y2="6" />
+            <line x1="3" y1="12" x2="21" y2="12" />
+            <line x1="3" y1="18" x2="21" y2="18" />
+          </svg>
+        </button>
+        <h1 className="app-topbar-title">{screenTitle}</h1>
+        <a href="/settings" className="app-topbar-btn" aria-label="Settings">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </a>
+      </header>
+
+      {drawerOpen && (
+        <div className="app-drawer-backdrop" onClick={() => setDrawerOpen(false)}>
+          <nav className="app-drawer" onClick={(e) => e.stopPropagation()}>
+            <div className="app-drawer-header">
+              <a href="/" className="app-drawer-logo">
+                <img src="/logo-horizontal.svg" alt="alpaca.blue" />
+              </a>
+              <button
+                className="app-drawer-close"
+                onClick={() => setDrawerOpen(false)}
+                aria-label="Close menu"
+              >
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+            </div>
+            {user?.avatarUrl && (
+              <div className="app-drawer-profile">
+                <img src={user.avatarUrl} alt="" className="app-drawer-avatar" />
+                <div className="app-drawer-userinfo">
+                  <span className="app-drawer-displayname">{user.displayName || user.blueskyHandle}</span>
+                  <span className="app-drawer-handle">@{user.blueskyHandle}</span>
+                </div>
+              </div>
+            )}
+            <div className="app-drawer-items">
+              <a href="/profile" className={`app-drawer-item${pathname === "/profile" ? " app-drawer-active" : ""}`}>Profile</a>
+              <a href="/timeline" className={`app-drawer-item${pathname === "/timeline" || pathname.startsWith("/posts/") ? " app-drawer-active" : ""}`}>Timeline</a>
+              <a href="/mentions" className={`app-drawer-item${pathname === "/mentions" ? " app-drawer-active" : ""}`}>Mentions</a>
+              <a href="/identities" className={`app-drawer-item${pathname === "/identities" || pathname.startsWith("/persons/") || pathname.startsWith("/identities/") ? " app-drawer-active" : ""}`}>Identities</a>
+              <a href="/settings" className={`app-drawer-item${pathname === "/settings" ? " app-drawer-active" : ""}`}>Settings</a>
+              <button onClick={handleLogout} className="app-drawer-item app-drawer-logout">Log out</button>
+            </div>
+          </nav>
+        </div>
+      )}
+
       <div className="app-content">
         {children}
       </div>
@@ -159,13 +239,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
       )}
 
       <nav className="app-bottombar">
-        <a href="/profile" className={`app-bottombar-item${pathname === "/profile" ? " app-bottombar-active" : ""}`}>
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="8" r="4" />
-            <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" />
-          </svg>
-        </a>
-        <a href="/timeline" className={`app-bottombar-item${pathname === "/timeline" || pathname.startsWith("/posts/") ? " app-bottombar-active" : ""}`}>
+        <a href="/timeline" className={`app-bottombar-item${pathname === "/timeline" || pathname.startsWith("/posts/") ? " app-bottombar-active" : ""}`} aria-label="Timeline">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="17" y1="10" x2="3" y2="10" />
             <line x1="21" y1="6" x2="3" y2="6" />
@@ -173,24 +247,16 @@ export function AppLayout({ children }: { children: ReactNode }) {
             <line x1="17" y1="18" x2="3" y2="18" />
           </svg>
         </a>
-        <a href="/mentions" className={`app-bottombar-item${pathname === "/mentions" ? " app-bottombar-active" : ""}`}>
+        <a href="/mentions" className={`app-bottombar-item${pathname === "/mentions" ? " app-bottombar-active" : ""}`} aria-label="Mentions">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="4" />
             <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94" />
           </svg>
         </a>
-        <a href="/identities" className={`app-bottombar-item${pathname === "/identities" || pathname.startsWith("/persons/") ? " app-bottombar-active" : ""}`}>
+        <a href="/profile" className={`app-bottombar-item${pathname === "/profile" ? " app-bottombar-active" : ""}`} aria-label="Profile">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2" />
-            <circle cx="9" cy="7" r="4" />
-            <path d="M22 21v-2a4 4 0 0 0-3-3.87" />
-            <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-          </svg>
-        </a>
-        <a href="/settings" className={`app-bottombar-item${pathname === "/settings" ? " app-bottombar-active" : ""}`}>
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-            <circle cx="12" cy="12" r="3" />
-            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+            <circle cx="12" cy="8" r="4" />
+            <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" />
           </svg>
         </a>
       </nav>

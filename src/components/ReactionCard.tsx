@@ -1,6 +1,21 @@
 "use client";
 
-import type { ReactionGroup } from "@/lib/reactions";
+import { useRouter } from "next/navigation";
+import type { ReactionGroup, Reactor } from "@/lib/reactions";
+
+function reactorProfileUrl(reactor: Reactor, platform: ReactionGroup["platform"]): string | null {
+  // Mastodon handles look like "@user@instance" or "user@instance".
+  // Everything else is treated as a Bluesky handle.
+  const isMastodon =
+    platform === "mastodon" || (platform === "both" && reactor.handle.includes("@"));
+  if (isMastodon) {
+    const m = reactor.handle.match(/^@?([^@]+)@(.+)$/);
+    if (!m) return null;
+    return `https://${m[2]}/@${m[1]}`;
+  }
+  const handle = reactor.handle.replace(/^@/, "");
+  return `https://bsky.app/profile/${handle}`;
+}
 
 function relativeTime(iso: string): string {
   const diff = Date.now() - new Date(iso).getTime();
@@ -80,6 +95,8 @@ const ICON_COLORS: Record<ReactionGroup["reactionType"], string> = {
 };
 
 export function ReactionCard({ group }: { group: ReactionGroup }) {
+  const router = useRouter();
+
   const content = (
     <div className="reaction-card">
       <div className="reaction-card-header">
@@ -91,13 +108,28 @@ export function ReactionCard({ group }: { group: ReactionGroup }) {
             {group.platform === "mastodon" ? "M" : "B"}
           </span>
           <div className="reaction-card-avatars">
-            {group.reactors.slice(0, 5).map((r, i) =>
-              r.avatarUrl ? (
-                <img key={i} src={r.avatarUrl} alt={r.displayName || r.handle} className="reaction-card-avatar" />
+            {group.reactors.slice(0, 5).map((r, i) => {
+              const profileUrl = reactorProfileUrl(r, group.platform);
+              const img = r.avatarUrl ? (
+                <img src={r.avatarUrl} alt={r.displayName || r.handle} className="reaction-card-avatar" />
               ) : (
-                <div key={i} className="reaction-card-avatar reaction-card-avatar-placeholder" />
-              )
-            )}
+                <div className="reaction-card-avatar reaction-card-avatar-placeholder" />
+              );
+              return profileUrl ? (
+                <a
+                  key={i}
+                  href={profileUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={(e) => e.stopPropagation()}
+                  title={r.displayName || r.handle}
+                >
+                  {img}
+                </a>
+              ) : (
+                <span key={i}>{img}</span>
+              );
+            })}
           </div>
           <span className="reaction-card-time">{relativeTime(group.latestAt)}</span>
         </div>
@@ -110,15 +142,19 @@ export function ReactionCard({ group }: { group: ReactionGroup }) {
   );
 
   if (group.subjectUrl) {
-    const isInternal = group.subjectUrl.startsWith("/");
+    const subjectUrl = group.subjectUrl;
+    const isInternal = subjectUrl.startsWith("/");
+    function handleClick(e: React.MouseEvent) {
+      const target = e.target as HTMLElement;
+      // Let nested links and images handle their own clicks.
+      if (target.closest("a") || target.tagName === "IMG") return;
+      if (isInternal) router.push(subjectUrl);
+      else window.open(subjectUrl, "_blank", "noopener,noreferrer");
+    }
     return (
-      <a
-        href={group.subjectUrl}
-        {...(!isInternal && { target: "_blank", rel: "noopener noreferrer" })}
-        className="reaction-card-link"
-      >
+      <div className="reaction-card-link reaction-card-clickable" onClick={handleClick}>
         {content}
-      </a>
+      </div>
     );
   }
 
