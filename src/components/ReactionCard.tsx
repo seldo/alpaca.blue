@@ -119,8 +119,6 @@ export function ReactionCard({ group }: { group: ReactionGroup }) {
                 <a
                   key={i}
                   href={profileUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
                   onClick={(e) => e.stopPropagation()}
                   title={r.displayName || r.handle}
                 >
