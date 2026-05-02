@@ -43,7 +43,7 @@ const sessionStore = {
 // the other gets "token already used", and the library deletes the session,
 // forcing re-auth.
 
-async function requestRedisLock<T>(name: string, fn: () => Promise<T>): Promise<T> {
+async function requestRedisLock<T>(name: string, fn: () => T | PromiseLike<T>): Promise<T> {
   const lockKey = `${KEY_PREFIX}lock:${name}`;
   const lockId = Math.random().toString(36).slice(2);
   const deadline = Date.now() + 15_000; // wait up to 15s to acquire
