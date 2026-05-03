@@ -3,7 +3,7 @@
 import { useState, useEffect, type ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import { CreatePost } from "@/components/CreatePost";
+import { CreatePost, type ReplyTarget } from "@/components/CreatePost";
 
 interface UserInfo {
   id: number;
@@ -36,6 +36,7 @@ function getScreenTitle(pathname: string): string {
 export function AppLayout({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserInfo | null>(cachedUser);
   const [composeOpen, setComposeOpen] = useState(false);
+  const [composeReplyTo, setComposeReplyTo] = useState<ReplyTarget | undefined>(undefined);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
@@ -50,6 +51,24 @@ export function AppLayout({ children }: { children: ReactNode }) {
       })
       .catch(() => {});
   }, []);
+
+  // Listen for compose:open events fired by other components (e.g. PostCard
+  // reply buttons). detail.replyTo is optional — when present, the compose
+  // view opens in reply mode with the parent post shown at the top.
+  useEffect(() => {
+    function handler(e: Event) {
+      const detail = (e as CustomEvent<{ replyTo?: ReplyTarget }>).detail;
+      setComposeReplyTo(detail?.replyTo);
+      setComposeOpen(true);
+    }
+    window.addEventListener("compose:open", handler);
+    return () => window.removeEventListener("compose:open", handler);
+  }, []);
+
+  function closeCompose() {
+    setComposeOpen(false);
+    setComposeReplyTo(undefined);
+  }
 
   // Close drawer on route change.
   const [prevPathname, setPrevPathname] = useState(pathname);
@@ -228,12 +247,13 @@ export function AppLayout({ children }: { children: ReactNode }) {
       </div>
 
       {composeOpen && (
-        <div className="create-post-modal-backdrop" onClick={() => setComposeOpen(false)}>
+        <div className="create-post-modal-backdrop" onClick={closeCompose}>
           <div className="create-post-modal" onClick={(e) => e.stopPropagation()}>
-            <p className="create-post-modal-title">New Post</p>
+            <p className="create-post-modal-title">{composeReplyTo ? "Reply" : "New Post"}</p>
             <CreatePost
-              onClose={() => setComposeOpen(false)}
-              onPosted={() => setComposeOpen(false)}
+              replyTo={composeReplyTo}
+              onClose={closeCompose}
+              onPosted={closeCompose}
             />
           </div>
         </div>

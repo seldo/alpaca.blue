@@ -247,11 +247,7 @@ export function PostCard({ post }: { post: PostData }) {
   const [favorited, setFavorited] = useState(false);
   const [localLikeCount, setLocalLikeCount] = useState(post.likeCount || 0);
   const [favoriting, setFavoriting] = useState(false);
-  const [replyOpen, setReplyOpen] = useState(false);
-  const [replyText, setReplyText] = useState("");
-  const [replying, setReplying] = useState(false);
-  const [replySuccess, setReplySuccess] = useState(false);
-  const [localReplyCount, setLocalReplyCount] = useState(post.replyCount || 0);
+  const [localReplyCount] = useState(post.replyCount || 0);
   const [reposted, setReposted] = useState(false);
   const [localRepostCount, setLocalRepostCount] = useState(post.repostCount || 0);
   const [reposting, setReposting] = useState(false);
@@ -320,82 +316,31 @@ export function PostCard({ post }: { post: PostData }) {
 
   function handleReplyToggle(e: React.MouseEvent) {
     e.stopPropagation();
-    if (replySuccess) {
-      setReplySuccess(false);
-      setReplyText("");
-    }
-    setReplyOpen(!replyOpen);
-  }
-
-  async function handleReplySubmit(e: React.FormEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    if (replying || !replyText.trim()) return;
-    setReplying(true);
-
-    try {
-      const text = replyText.trim();
-      const crossPost = post.alsoPostedOn?.find((p) => p.platform !== post.platform);
-      const fetches: Promise<Response>[] = [];
-
-      if (post.platform === "bluesky") {
-        if (!post.platformPostCid) { console.warn("Cannot reply: missing CID"); return; }
-        fetches.push(fetch("/api/bluesky/post", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text,
-            replyTo: { uri: post.platformPostId, cid: post.platformPostCid },
-            replyRoot: post.threadRootId && post.threadRootCid
-              ? { uri: post.threadRootId, cid: post.threadRootCid }
-              : { uri: post.platformPostId, cid: post.platformPostCid },
-          }),
-        }));
-        if (crossPost?.platform === "mastodon") {
-          fetches.push(fetch("/api/mastodon/reply", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ statusId: crossPost.platformPostId, content: text }),
-          }));
-        }
-      } else if (post.platform === "mastodon") {
-        fetches.push(fetch(`/api/posts/${post.id}/reply`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content: text }),
-        }));
-        if (crossPost?.platform === "bluesky" && crossPost.platformPostCid) {
-          fetches.push(fetch("/api/bluesky/post", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              text,
-              replyTo: { uri: crossPost.platformPostId, cid: crossPost.platformPostCid },
-              replyRoot: crossPost.threadRootId && crossPost.threadRootCid
-                ? { uri: crossPost.threadRootId, cid: crossPost.threadRootCid }
-                : { uri: crossPost.platformPostId, cid: crossPost.platformPostCid },
-            }),
-          }));
-        }
-      }
-
-      const results = await Promise.allSettled(fetches);
-      const anyOk = results.some((r) => r.status === "fulfilled" && r.value.ok);
-      if (anyOk) {
-        setReplySuccess(true);
-        setReplyText("");
-        setLocalReplyCount((c) => c + 1);
-      } else {
-        console.error("All replies failed");
-      }
-      results.forEach((r, i) => {
-        if (r.status === "rejected") console.error(`Reply[${i}] error:`, r.reason);
-      });
-    } catch (err) {
-      console.error("Reply error:", err);
-    } finally {
-      setReplying(false);
-    }
+    window.dispatchEvent(
+      new CustomEvent("compose:open", {
+        detail: {
+          replyTo: {
+            id: post.id,
+            platform: post.platform,
+            platformPostId: post.platformPostId,
+            platformPostCid: post.platformPostCid ?? null,
+            threadRootId: post.threadRootId ?? null,
+            threadRootCid: post.threadRootCid ?? null,
+            content: post.content,
+            authorHandle: post.author?.handle ?? null,
+            authorDisplayName: post.author?.displayName ?? null,
+            authorAvatar: post.author?.avatarUrl ?? null,
+            alsoPostedOn: (post.alsoPostedOn || []).map((cp) => ({
+              platform: cp.platform,
+              platformPostId: cp.platformPostId,
+              platformPostCid: cp.platformPostCid,
+              threadRootId: cp.threadRootId,
+              threadRootCid: cp.threadRootCid,
+            })),
+          },
+        },
+      })
+    );
   }
 
   function handleRepostMenuToggle(e: React.MouseEvent) {
@@ -771,7 +716,7 @@ export function PostCard({ post }: { post: PostData }) {
 
       <div className="post-engagement">
         <button
-          className={`post-reply-btn${replyOpen ? " post-reply-active" : ""}`}
+          className="post-reply-btn"
           onClick={handleReplyToggle}
           title="Reply"
         >
@@ -816,46 +761,6 @@ export function PostCard({ post }: { post: PostData }) {
         </button>
       </div>
 
-      {replyOpen && (
-        <div className="post-reply-composer" onClick={(e) => e.stopPropagation()}>
-          {replySuccess ? (
-            <div className="post-reply-success">
-              Reply sent!
-              <button
-                className="post-reply-success-close"
-                onClick={(e) => { e.stopPropagation(); setReplyOpen(false); setReplySuccess(false); }}
-              >
-                Dismiss
-              </button>
-            </div>
-          ) : (
-            <form onSubmit={handleReplySubmit} className="post-reply-form">
-              <textarea
-                className="post-reply-input"
-                placeholder={`Reply on ${post.platform === "bluesky" ? "Bluesky" : "Mastodon"}...`}
-                value={replyText}
-                onChange={(e) => setReplyText(e.target.value)}
-                rows={3}
-                maxLength={post.platform === "bluesky" ? 300 : 500}
-                disabled={replying}
-                autoFocus
-              />
-              <div className="post-reply-actions">
-                <span className="post-reply-charcount">
-                  {replyText.length}/{post.platform === "bluesky" ? 300 : 500}
-                </span>
-                <button
-                  type="submit"
-                  className="btn btn-primary post-reply-submit"
-                  disabled={replying || !replyText.trim()}
-                >
-                  {replying ? "Sending..." : "Reply"}
-                </button>
-              </div>
-            </form>
-          )}
-        </div>
-      )}
 
       {quoteOpen && (
         <div className="post-quote-composer" onClick={(e) => e.stopPropagation()}>

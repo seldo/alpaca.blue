@@ -2,9 +2,30 @@
 
 import { useState, useRef } from "react";
 
+export interface ReplyTarget {
+  id: number;
+  platform: string;
+  platformPostId: string;
+  platformPostCid: string | null;
+  threadRootId: string | null;
+  threadRootCid: string | null;
+  content: string | null;
+  authorHandle: string | null;
+  authorDisplayName: string | null;
+  authorAvatar: string | null;
+  alsoPostedOn: Array<{
+    platform: string;
+    platformPostId: string;
+    platformPostCid: string | null;
+    threadRootId: string | null;
+    threadRootCid: string | null;
+  }>;
+}
+
 interface CreatePostProps {
   onClose?: () => void;
   onPosted?: () => void;
+  replyTo?: ReplyTarget;
 }
 
 const MAX_IMAGES = 4;
@@ -60,7 +81,7 @@ async function compressImage(file: File): Promise<File> {
   });
 }
 
-export function CreatePost({ onClose, onPosted }: CreatePostProps) {
+export function CreatePost({ onClose, onPosted, replyTo }: CreatePostProps) {
   const [text, setText] = useState("");
   const [images, setImages] = useState<File[]>([]);
   const [previews, setPreviews] = useState<string[]>([]);
@@ -127,6 +148,46 @@ export function CreatePost({ onClose, onPosted }: CreatePostProps) {
     );
   }
 
+  // Resolve which platform-specific posts we're replying to (if any). The
+  // primary post is the one the user clicked Reply on; alsoPostedOn lists
+  // mirrors on other platforms. We send a reply to every available target.
+  function getReplyTargets() {
+    if (!replyTo) return { bluesky: undefined, mastodon: undefined };
+
+    let bluesky:
+      | { uri: string; cid: string; threadRootId: string | null; threadRootCid: string | null }
+      | undefined;
+    let mastodon: { statusId: string } | undefined;
+
+    const consider = (
+      platform: string,
+      platformPostId: string,
+      platformPostCid: string | null,
+      threadRootId: string | null,
+      threadRootCid: string | null,
+    ) => {
+      if (platform === "bluesky" && platformPostCid && !bluesky) {
+        bluesky = { uri: platformPostId, cid: platformPostCid, threadRootId, threadRootCid };
+      }
+      if (platform === "mastodon" && !mastodon) {
+        mastodon = { statusId: platformPostId };
+      }
+    };
+
+    consider(
+      replyTo.platform,
+      replyTo.platformPostId,
+      replyTo.platformPostCid,
+      replyTo.threadRootId,
+      replyTo.threadRootCid,
+    );
+    for (const cp of replyTo.alsoPostedOn || []) {
+      consider(cp.platform, cp.platformPostId, cp.platformPostCid, cp.threadRootId, cp.threadRootCid);
+    }
+
+    return { bluesky, mastodon };
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!canPost) return;
@@ -136,37 +197,65 @@ export function CreatePost({ onClose, onPosted }: CreatePostProps) {
     const content = text.trim();
     const results: string[] = [];
     const errors: string[] = [];
+    const isReply = !!replyTo;
+    const { bluesky: bsReplyTarget, mastodon: mastoReplyTarget } = getReplyTargets();
+
+    async function postToBluesky(blueskyImages?: { image: unknown; alt: string }[]): Promise<boolean> {
+      const body: Record<string, unknown> = { text: content };
+      if (blueskyImages && blueskyImages.length > 0) body.images = blueskyImages;
+      if (bsReplyTarget) {
+        body.replyTo = { uri: bsReplyTarget.uri, cid: bsReplyTarget.cid };
+        body.replyRoot =
+          bsReplyTarget.threadRootId && bsReplyTarget.threadRootCid
+            ? { uri: bsReplyTarget.threadRootId, cid: bsReplyTarget.threadRootCid }
+            : { uri: bsReplyTarget.uri, cid: bsReplyTarget.cid };
+      }
+      const res = await fetch("/api/bluesky/post", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return res.ok;
+    }
+
+    async function postToMastodon(mediaIds?: string[]): Promise<boolean> {
+      const body: Record<string, unknown> = { content };
+      if (mediaIds && mediaIds.length > 0) body.mediaIds = mediaIds;
+      if (mastoReplyTarget) body.inReplyToId = mastoReplyTarget.statusId;
+      const res = await fetch("/api/posts/create", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      return res.ok;
+    }
+
+    // Determine which platforms to send to. For replies, only platforms
+    // where we have a corresponding target. For new posts, both.
+    const sendToBluesky = isReply ? !!bsReplyTarget : true;
+    const sendToMastodon = isReply ? !!mastoReplyTarget : true;
 
     // When images are present, Mastodon goes first — Bluesky only posts if Mastodon succeeds
     if (images.length > 0) {
+      let mediaIds: string[] = [];
       let mastodonOk = false;
-      try {
-        const mediaIds = await uploadToMastodon();
-        const res = await fetch("/api/posts/create", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content, mediaIds }),
-        });
-        if (res.ok) {
-          results.push("Mastodon");
-          mastodonOk = true;
-        } else {
+      if (sendToMastodon) {
+        try {
+          mediaIds = await uploadToMastodon();
+          mastodonOk = await postToMastodon(mediaIds);
+          if (mastodonOk) results.push("Mastodon");
+          else errors.push("Mastodon");
+        } catch (err) {
+          console.error("Mastodon post error:", err);
           errors.push("Mastodon");
         }
-      } catch (err) {
-        console.error("Mastodon post error:", err);
-        errors.push("Mastodon");
       }
 
-      if (mastodonOk) {
+      if (sendToBluesky && (!sendToMastodon || mastodonOk)) {
         try {
           const blueskyImages = await uploadToBluesky();
-          const bsRes = await fetch("/api/bluesky/post", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: content, images: blueskyImages }),
-          });
-          if (bsRes.ok) results.push("Bluesky");
+          const ok = await postToBluesky(blueskyImages);
+          if (ok) results.push("Bluesky");
           else errors.push("Bluesky");
         } catch (err) {
           console.error("Bluesky post error:", err);
@@ -174,23 +263,19 @@ export function CreatePost({ onClose, onPosted }: CreatePostProps) {
         }
       }
     } else {
-      // No images — post to both independently
-      const [bsRes, mastoRes] = await Promise.allSettled([
-        fetch("/api/bluesky/post", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ text: content }),
-        }),
-        fetch("/api/posts/create", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content }),
-        }),
-      ]);
-      if (bsRes.status === "fulfilled" && bsRes.value.ok) results.push("Bluesky");
-      else errors.push("Bluesky");
-      if (mastoRes.status === "fulfilled" && mastoRes.value.ok) results.push("Mastodon");
-      else errors.push("Mastodon");
+      // No images — fan out to whichever platforms apply
+      const promises: Array<Promise<{ platform: string; ok: boolean }>> = [];
+      if (sendToBluesky) {
+        promises.push(postToBluesky().then((ok) => ({ platform: "Bluesky", ok })).catch(() => ({ platform: "Bluesky", ok: false })));
+      }
+      if (sendToMastodon) {
+        promises.push(postToMastodon().then((ok) => ({ platform: "Mastodon", ok })).catch(() => ({ platform: "Mastodon", ok: false })));
+      }
+      const settled = await Promise.all(promises);
+      for (const s of settled) {
+        if (s.ok) results.push(s.platform);
+        else errors.push(s.platform);
+      }
     }
 
     setPosting(false);
@@ -235,9 +320,24 @@ export function CreatePost({ onClose, onPosted }: CreatePostProps) {
 
   return (
     <form onSubmit={handleSubmit} className="create-post-form">
+      {replyTo && (
+        <div className="create-post-reply-target">
+          {replyTo.authorAvatar && (
+            <img src={replyTo.authorAvatar} alt="" className="create-post-reply-avatar" />
+          )}
+          <div className="create-post-reply-body">
+            <div className="create-post-reply-author">
+              {replyTo.authorDisplayName || replyTo.authorHandle}
+            </div>
+            {replyTo.content && (
+              <div className="create-post-reply-text">{replyTo.content}</div>
+            )}
+          </div>
+        </div>
+      )}
       <textarea
         className="post-reply-input create-post-input"
-        placeholder="What's up?"
+        placeholder={replyTo ? "Write your reply…" : "What's up?"}
         value={text}
         onChange={(e) => { setText(e.target.value); setError(null); }}
         rows={4}

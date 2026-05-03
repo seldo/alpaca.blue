@@ -2088,6 +2088,60 @@ a.post-timestamp:hover {
   font-size: 1rem;
 }
 
+/* Parent post preview shown when composing a reply */
+.create-post-reply-target {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  margin-bottom: 10px;
+  background: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  flex-shrink: 0;
+  max-height: 30vh;
+  overflow: hidden;
+  position: relative;
+}
+
+.create-post-reply-target::after {
+  /* Soft fade at bottom hints there's more below if the post is long */
+  content: "";
+  position: absolute;
+  inset: auto 0 0 0;
+  height: 24px;
+  background: linear-gradient(to bottom, transparent, var(--color-surface));
+  pointer-events: none;
+}
+
+.create-post-reply-avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  object-fit: cover;
+}
+
+.create-post-reply-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.create-post-reply-author {
+  font-weight: 600;
+  font-size: 0.9rem;
+  margin-bottom: 2px;
+  color: var(--color-text);
+}
+
+.create-post-reply-text {
+  font-size: 0.9rem;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
 /* Mobile: bottom-docked slide-up compose, ~80% screen height */
 @media (max-width: 639px) {
   .create-post-modal-backdrop {

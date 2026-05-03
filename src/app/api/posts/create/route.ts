@@ -13,6 +13,10 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const content = (body.content || "").trim();
     const mediaIds: string[] = Array.isArray(body.mediaIds) ? body.mediaIds : [];
+    const inReplyToId: string | undefined =
+      typeof body.inReplyToId === "string" && body.inReplyToId.length > 0
+        ? body.inReplyToId
+        : undefined;
     if (!content && mediaIds.length === 0) {
       return NextResponse.json({ error: "Post cannot be empty" }, { status: 400 });
     }
@@ -44,6 +48,7 @@ export async function POST(request: NextRequest) {
       body: JSON.stringify({
         status: content,
         ...(mediaIds.length > 0 ? { media_ids: mediaIds } : {}),
+        ...(inReplyToId ? { in_reply_to_id: inReplyToId } : {}),
       }),
     });
 
