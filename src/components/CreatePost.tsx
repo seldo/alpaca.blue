@@ -68,6 +68,7 @@ export function CreatePost({ onClose, onPosted }: CreatePostProps) {
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  const [editingAltIndex, setEditingAltIndex] = useState<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const hasContent = text.trim().length > 0 || images.length > 0;
@@ -217,6 +218,21 @@ export function CreatePost({ onClose, onPosted }: CreatePostProps) {
     );
   }
 
+  if (editingAltIndex !== null && images[editingAltIndex]) {
+    return (
+      <AltEditor
+        file={images[editingAltIndex]}
+        previewUrl={previews[editingAltIndex]}
+        value={alts[editingAltIndex] || ""}
+        onSave={(newAlt) => {
+          setAlts((prev) => prev.map((a, j) => (j === editingAltIndex ? newAlt : a)));
+          setEditingAltIndex(null);
+        }}
+        onCancel={() => setEditingAltIndex(null)}
+      />
+    );
+  }
+
   return (
     <form onSubmit={handleSubmit} className="create-post-form">
       <textarea
@@ -246,15 +262,15 @@ export function CreatePost({ onClose, onPosted }: CreatePostProps) {
                   ×
                 </button>
               </div>
-              <input
-                type="text"
-                className="create-post-alt-input"
-                placeholder="Alt text…"
-                value={alts[i] || ""}
-                onChange={(e) => setAlts((prev) => prev.map((a, j) => j === i ? e.target.value : a))}
+              <button
+                type="button"
+                className="create-post-alt-btn"
+                onClick={() => setEditingAltIndex(i)}
                 disabled={posting}
-                maxLength={1000}
-              />
+                title={alts[i] || "Add alt text"}
+              >
+                {alts[i] ? alts[i] : "+ Alt text"}
+              </button>
             </div>
           ))}
         </div>
@@ -307,5 +323,89 @@ export function CreatePost({ onClose, onPosted }: CreatePostProps) {
         </div>
       </div>
     </form>
+  );
+}
+
+const ALT_MAX = 1000;
+
+interface AltEditorProps {
+  file: File;
+  previewUrl: string;
+  value: string;
+  onSave: (alt: string) => void;
+  onCancel: () => void;
+}
+
+function AltEditor({ file, previewUrl, value, onSave, onCancel }: AltEditorProps) {
+  const [draft, setDraft] = useState(value);
+  const [generating, setGenerating] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function handleGenerate() {
+    setGenerating(true);
+    setError(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/ai/describe-image", { method: "POST", body: formData });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        setError(data.error || "Failed to generate alt text");
+        return;
+      }
+      const data = await res.json();
+      if (data.description) setDraft(data.description.slice(0, ALT_MAX));
+    } catch (err) {
+      console.error("AI describe error:", err);
+      setError("Failed to generate alt text");
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  return (
+    <div className="alt-editor">
+      <div className="alt-editor-header">
+        <button type="button" className="btn btn-outline" onClick={onCancel}>
+          Cancel
+        </button>
+        <h2 className="alt-editor-title">Alt text</h2>
+        <button type="button" className="btn btn-primary" onClick={() => onSave(draft)}>
+          Save
+        </button>
+      </div>
+
+      <div className="alt-editor-image">
+        <img src={previewUrl} alt={draft || "preview"} />
+      </div>
+
+      <textarea
+        className="alt-editor-textarea"
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        maxLength={ALT_MAX}
+        placeholder="Describe this image for screen readers…"
+        autoFocus
+      />
+
+      {error && <p className="alt-editor-error">{error}</p>}
+
+      <div className="alt-editor-actions">
+        <button
+          type="button"
+          className="btn btn-outline alt-editor-ai-btn"
+          onClick={handleGenerate}
+          disabled={generating}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 3v3M12 18v3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M3 12h3M18 12h3M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1" />
+          </svg>
+          {generating ? "Generating…" : "Generate with AI"}
+        </button>
+        <span className="alt-editor-charcount">
+          {draft.length}/{ALT_MAX}
+        </span>
+      </div>
+    </div>
   );
 }
