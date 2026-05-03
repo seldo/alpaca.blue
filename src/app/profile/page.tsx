@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
+import { usePullToRefresh } from "@/lib/usePullToRefresh";
 
 interface UserInfo {
   blueskyHandle: string;
@@ -88,6 +89,8 @@ export default function ProfilePage() {
     refreshPosts();
   }, [refreshPosts]);
 
+  const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refreshPosts, fetching);
+
   async function loadMore() {
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
@@ -105,6 +108,11 @@ export default function ProfilePage() {
 
   return (
     <AppLayout>
+      {(pullDistance > 0 || pullRefreshing) && (
+        <div className="pull-indicator" style={{ height: pullRefreshing ? 48 : pullDistance * 0.5 }}>
+          <div className="spinner" style={{ opacity: pullRefreshing ? 1 : pullDistance > 0 ? 0.4 + 0.6 * (pullDistance / 72) : 0 }} />
+        </div>
+      )}
       <div className="profile-header">
         {user?.avatarUrl && (
           <img src={user.avatarUrl} alt="" className="profile-avatar" />

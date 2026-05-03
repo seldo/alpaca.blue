@@ -2142,6 +2142,20 @@ a.post-timestamp:hover {
   overflow-wrap: break-word;
 }
 
+.create-post-reply-targets {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0 0 10px;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.create-post-reply-targets-text {
+  line-height: 1;
+}
+
 /* Mobile: bottom-docked slide-up compose, ~80% screen height */
 @media (max-width: 639px) {
   .create-post-modal-backdrop {

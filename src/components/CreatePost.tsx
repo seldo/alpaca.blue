@@ -28,6 +28,44 @@ interface CreatePostProps {
   replyTo?: ReplyTarget;
 }
 
+interface ResolvedReplyTargets {
+  bluesky?: { uri: string; cid: string; threadRootId: string | null; threadRootCid: string | null };
+  mastodon?: { statusId: string };
+}
+
+function computeReplyTargets(replyTo: ReplyTarget | undefined): ResolvedReplyTargets {
+  if (!replyTo) return {};
+  const result: ResolvedReplyTargets = {};
+
+  const consider = (
+    platform: string,
+    platformPostId: string,
+    platformPostCid: string | null,
+    threadRootId: string | null,
+    threadRootCid: string | null,
+  ) => {
+    if (platform === "bluesky" && platformPostCid && !result.bluesky) {
+      result.bluesky = { uri: platformPostId, cid: platformPostCid, threadRootId, threadRootCid };
+    }
+    if (platform === "mastodon" && !result.mastodon) {
+      result.mastodon = { statusId: platformPostId };
+    }
+  };
+
+  consider(
+    replyTo.platform,
+    replyTo.platformPostId,
+    replyTo.platformPostCid,
+    replyTo.threadRootId,
+    replyTo.threadRootCid,
+  );
+  for (const cp of replyTo.alsoPostedOn || []) {
+    consider(cp.platform, cp.platformPostId, cp.platformPostCid, cp.threadRootId, cp.threadRootCid);
+  }
+
+  return result;
+}
+
 const MAX_IMAGES = 4;
 const MAX_LENGTH = 300;
 const MAX_DIMENSION = 2048;
@@ -151,42 +189,7 @@ export function CreatePost({ onClose, onPosted, replyTo }: CreatePostProps) {
   // Resolve which platform-specific posts we're replying to (if any). The
   // primary post is the one the user clicked Reply on; alsoPostedOn lists
   // mirrors on other platforms. We send a reply to every available target.
-  function getReplyTargets() {
-    if (!replyTo) return { bluesky: undefined, mastodon: undefined };
-
-    let bluesky:
-      | { uri: string; cid: string; threadRootId: string | null; threadRootCid: string | null }
-      | undefined;
-    let mastodon: { statusId: string } | undefined;
-
-    const consider = (
-      platform: string,
-      platformPostId: string,
-      platformPostCid: string | null,
-      threadRootId: string | null,
-      threadRootCid: string | null,
-    ) => {
-      if (platform === "bluesky" && platformPostCid && !bluesky) {
-        bluesky = { uri: platformPostId, cid: platformPostCid, threadRootId, threadRootCid };
-      }
-      if (platform === "mastodon" && !mastodon) {
-        mastodon = { statusId: platformPostId };
-      }
-    };
-
-    consider(
-      replyTo.platform,
-      replyTo.platformPostId,
-      replyTo.platformPostCid,
-      replyTo.threadRootId,
-      replyTo.threadRootCid,
-    );
-    for (const cp of replyTo.alsoPostedOn || []) {
-      consider(cp.platform, cp.platformPostId, cp.platformPostCid, cp.threadRootId, cp.threadRootCid);
-    }
-
-    return { bluesky, mastodon };
-  }
+  const replyTargets = computeReplyTargets(replyTo);
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -198,7 +201,7 @@ export function CreatePost({ onClose, onPosted, replyTo }: CreatePostProps) {
     const results: string[] = [];
     const errors: string[] = [];
     const isReply = !!replyTo;
-    const { bluesky: bsReplyTarget, mastodon: mastoReplyTarget } = getReplyTargets();
+    const { bluesky: bsReplyTarget, mastodon: mastoReplyTarget } = replyTargets;
 
     async function postToBluesky(blueskyImages?: { image: unknown; alt: string }[]): Promise<boolean> {
       const body: Record<string, unknown> = { text: content };
@@ -321,19 +324,22 @@ export function CreatePost({ onClose, onPosted, replyTo }: CreatePostProps) {
   return (
     <form onSubmit={handleSubmit} className="create-post-form">
       {replyTo && (
-        <div className="create-post-reply-target">
-          {replyTo.authorAvatar && (
-            <img src={replyTo.authorAvatar} alt="" className="create-post-reply-avatar" />
-          )}
-          <div className="create-post-reply-body">
-            <div className="create-post-reply-author">
-              {replyTo.authorDisplayName || replyTo.authorHandle}
-            </div>
-            {replyTo.content && (
-              <div className="create-post-reply-text">{replyTo.content}</div>
+        <>
+          <div className="create-post-reply-target">
+            {replyTo.authorAvatar && (
+              <img src={replyTo.authorAvatar} alt="" className="create-post-reply-avatar" />
             )}
+            <div className="create-post-reply-body">
+              <div className="create-post-reply-author">
+                {replyTo.authorDisplayName || replyTo.authorHandle}
+              </div>
+              {replyTo.content && (
+                <div className="create-post-reply-text">{replyTo.content}</div>
+              )}
+            </div>
           </div>
-        </div>
+          <ReplyTargetsIndicator targets={replyTargets} />
+        </>
       )}
       <textarea
         className="post-reply-input create-post-input"
@@ -423,6 +429,30 @@ export function CreatePost({ onClose, onPosted, replyTo }: CreatePostProps) {
         </div>
       </div>
     </form>
+  );
+}
+
+function ReplyTargetsIndicator({ targets }: { targets: ResolvedReplyTargets }) {
+  const platforms: Array<{ key: "bluesky" | "mastodon"; label: string; badge: string }> = [];
+  if (targets.bluesky) platforms.push({ key: "bluesky", label: "Bluesky", badge: "B" });
+  if (targets.mastodon) platforms.push({ key: "mastodon", label: "Mastodon", badge: "M" });
+  if (platforms.length === 0) return null;
+
+  const labels = platforms.map((p) => p.label);
+  const text =
+    labels.length === 1
+      ? `Replying on ${labels[0]}`
+      : `Replying on ${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+
+  return (
+    <div className="create-post-reply-targets">
+      {platforms.map((p) => (
+        <span key={p.key} className={`platform-badge ${p.key}`} title={p.label}>
+          {p.badge}
+        </span>
+      ))}
+      <span className="create-post-reply-targets-text">{text}</span>
+    </div>
   );
 }
 
