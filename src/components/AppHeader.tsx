@@ -2,6 +2,7 @@
 
 import { useState, useEffect, type ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
+import Link from "next/link";
 import { CreatePost } from "@/components/CreatePost";
 
 interface UserInfo {
@@ -40,10 +41,12 @@ export function AppLayout({ children }: { children: ReactNode }) {
       .catch(() => {});
   }, []);
 
-  // Close drawer on route change
-  useEffect(() => {
-    setDrawerOpen(false);
-  }, [pathname]);
+  // Close drawer on route change.
+  const [prevPathname, setPrevPathname] = useState(pathname);
+  if (prevPathname !== pathname) {
+    setPrevPathname(pathname);
+    if (drawerOpen) setDrawerOpen(false);
+  }
 
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
@@ -63,10 +66,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
       <div className="app-layout-body">
       <aside className="app-sidebar">
         <div className="app-sidebar-top">
-          <a href="/" className="app-sidebar-logo">
+          <Link href="/" className="app-sidebar-logo">
             <img src="/logomark.svg" alt="" className="app-sidebar-logo-icon" />
             <img src="/logo-horizontal.svg" alt="alpaca.blue" className="app-sidebar-logo-full" />
-          </a>
+          </Link>
 
           {user?.avatarUrl && (
             <div className="app-sidebar-profile">
@@ -83,7 +86,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
           </button>
 
           <nav className="app-sidebar-nav">
-            <a
+            <Link
               href="/profile"
               className={`app-sidebar-item${pathname === "/profile" ? " app-sidebar-active" : ""}`}
               title="Profile"
@@ -93,8 +96,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
                 <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" />
               </svg>
               <span className="app-sidebar-label">Profile</span>
-            </a>
-            <a
+            </Link>
+            <Link
               href="/timeline"
               className={`app-sidebar-item${pathname === "/timeline" || pathname.startsWith("/posts/") ? " app-sidebar-active" : ""}`}
               title="Timeline"
@@ -106,8 +109,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
                 <line x1="17" y1="18" x2="3" y2="18" />
               </svg>
               <span className="app-sidebar-label">Timeline</span>
-            </a>
-            <a
+            </Link>
+            <Link
               href="/mentions"
               className={`app-sidebar-item${pathname === "/mentions" ? " app-sidebar-active" : ""}`}
               title="Mentions"
@@ -117,8 +120,8 @@ export function AppLayout({ children }: { children: ReactNode }) {
                 <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94" />
               </svg>
               <span className="app-sidebar-label">Mentions</span>
-            </a>
-            <a
+            </Link>
+            <Link
               href="/identities"
               className={`app-sidebar-item${pathname === "/identities" || pathname.startsWith("/persons/") ? " app-sidebar-active" : ""}`}
               title="Identities"
@@ -130,12 +133,12 @@ export function AppLayout({ children }: { children: ReactNode }) {
                 <path d="M16 3.13a4 4 0 0 1 0 7.75" />
               </svg>
               <span className="app-sidebar-label">Identities</span>
-            </a>
+            </Link>
           </nav>
         </div>
 
         <div className="app-sidebar-bottom">
-          <a
+          <Link
             href="/settings"
             className={`app-sidebar-item${pathname === "/settings" ? " app-sidebar-active" : ""}`}
             title="Settings"
@@ -145,7 +148,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
               <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
             </svg>
             <span className="app-sidebar-label">Settings</span>
-          </a>
+          </Link>
           <button onClick={handleLogout} className="app-sidebar-item app-sidebar-logout" title="Log out">
             <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
@@ -169,21 +172,21 @@ export function AppLayout({ children }: { children: ReactNode }) {
           </svg>
         </button>
         <h1 className="app-topbar-title">{screenTitle}</h1>
-        <a href="/settings" className="app-topbar-btn" aria-label="Settings">
+        <Link href="/settings" className="app-topbar-btn" aria-label="Settings">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="3" />
             <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
           </svg>
-        </a>
+        </Link>
       </header>
 
       {drawerOpen && (
         <div className="app-drawer-backdrop" onClick={() => setDrawerOpen(false)}>
           <nav className="app-drawer" onClick={(e) => e.stopPropagation()}>
             <div className="app-drawer-header">
-              <a href="/" className="app-drawer-logo">
+              <Link href="/" className="app-drawer-logo">
                 <img src="/logo-horizontal.svg" alt="alpaca.blue" />
-              </a>
+              </Link>
               <button
                 className="app-drawer-close"
                 onClick={() => setDrawerOpen(false)}
@@ -205,11 +208,11 @@ export function AppLayout({ children }: { children: ReactNode }) {
               </div>
             )}
             <div className="app-drawer-items">
-              <a href="/profile" className={`app-drawer-item${pathname === "/profile" ? " app-drawer-active" : ""}`}>Profile</a>
-              <a href="/timeline" className={`app-drawer-item${pathname === "/timeline" || pathname.startsWith("/posts/") ? " app-drawer-active" : ""}`}>Timeline</a>
-              <a href="/mentions" className={`app-drawer-item${pathname === "/mentions" ? " app-drawer-active" : ""}`}>Mentions</a>
-              <a href="/identities" className={`app-drawer-item${pathname === "/identities" || pathname.startsWith("/persons/") || pathname.startsWith("/identities/") ? " app-drawer-active" : ""}`}>Identities</a>
-              <a href="/settings" className={`app-drawer-item${pathname === "/settings" ? " app-drawer-active" : ""}`}>Settings</a>
+              <Link href="/profile" className={`app-drawer-item${pathname === "/profile" ? " app-drawer-active" : ""}`}>Profile</Link>
+              <Link href="/timeline" className={`app-drawer-item${pathname === "/timeline" || pathname.startsWith("/posts/") ? " app-drawer-active" : ""}`}>Timeline</Link>
+              <Link href="/mentions" className={`app-drawer-item${pathname === "/mentions" ? " app-drawer-active" : ""}`}>Mentions</Link>
+              <Link href="/identities" className={`app-drawer-item${pathname === "/identities" || pathname.startsWith("/persons/") || pathname.startsWith("/identities/") ? " app-drawer-active" : ""}`}>Identities</Link>
+              <Link href="/settings" className={`app-drawer-item${pathname === "/settings" ? " app-drawer-active" : ""}`}>Settings</Link>
               <button onClick={handleLogout} className="app-drawer-item app-drawer-logout">Log out</button>
             </div>
           </nav>
@@ -239,26 +242,26 @@ export function AppLayout({ children }: { children: ReactNode }) {
       )}
 
       <nav className="app-bottombar">
-        <a href="/timeline" className={`app-bottombar-item${pathname === "/timeline" || pathname.startsWith("/posts/") ? " app-bottombar-active" : ""}`} aria-label="Timeline">
+        <Link href="/timeline" prefetch className={`app-bottombar-item${pathname === "/timeline" || pathname.startsWith("/posts/") ? " app-bottombar-active" : ""}`} aria-label="Timeline">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="17" y1="10" x2="3" y2="10" />
             <line x1="21" y1="6" x2="3" y2="6" />
             <line x1="21" y1="14" x2="3" y2="14" />
             <line x1="17" y1="18" x2="3" y2="18" />
           </svg>
-        </a>
-        <a href="/mentions" className={`app-bottombar-item${pathname === "/mentions" ? " app-bottombar-active" : ""}`} aria-label="Mentions">
+        </Link>
+        <Link href="/mentions" prefetch className={`app-bottombar-item${pathname === "/mentions" ? " app-bottombar-active" : ""}`} aria-label="Mentions">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="4" />
             <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94" />
           </svg>
-        </a>
-        <a href="/profile" className={`app-bottombar-item${pathname === "/profile" ? " app-bottombar-active" : ""}`} aria-label="Profile">
+        </Link>
+        <Link href="/profile" prefetch className={`app-bottombar-item${pathname === "/profile" ? " app-bottombar-active" : ""}`} aria-label="Profile">
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="8" r="4" />
             <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" />
           </svg>
-        </a>
+        </Link>
       </nav>
       </div>
     </div>
