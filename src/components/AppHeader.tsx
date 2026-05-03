@@ -13,6 +13,13 @@ interface UserInfo {
   needsReauth?: boolean;
 }
 
+// Module-scope cache so the sidebar avatar/handle survive client-side
+// navigations between pages without flickering. AppLayout is rendered by
+// each page individually, so it remounts on every nav — without this
+// cache we'd refetch /api/auth/me from scratch and show an empty sidebar
+// for a frame.
+let cachedUser: UserInfo | null = null;
+
 function getScreenTitle(pathname: string): string {
   if (pathname === "/profile") return "Profile";
   if (pathname === "/timeline") return "Timeline";
@@ -27,7 +34,7 @@ function getScreenTitle(pathname: string): string {
 }
 
 export function AppLayout({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<UserInfo | null>(null);
+  const [user, setUser] = useState<UserInfo | null>(cachedUser);
   const [composeOpen, setComposeOpen] = useState(false);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const router = useRouter();
@@ -37,7 +44,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
   useEffect(() => {
     fetch("/api/auth/me")
       .then((res) => (res.ok ? res.json() : null))
-      .then((data) => setUser(data))
+      .then((data) => {
+        cachedUser = data;
+        setUser(data);
+      })
       .catch(() => {});
   }, []);
 
@@ -51,6 +61,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   async function handleLogout() {
     await fetch("/api/auth/logout", { method: "POST" });
     sessionStorage.clear();
+    cachedUser = null;
     router.push("/login");
   }
 
@@ -72,13 +83,17 @@ export function AppLayout({ children }: { children: ReactNode }) {
           </Link>
 
           {user?.avatarUrl && (
-            <div className="app-sidebar-profile">
+            <Link
+              href="/profile"
+              className={`app-sidebar-profile${pathname === "/profile" ? " app-sidebar-profile-active" : ""}`}
+              title="Profile"
+            >
               <img src={user.avatarUrl} alt="" className="app-sidebar-avatar" />
               <div className="app-sidebar-userinfo">
                 <span className="app-sidebar-displayname">{user.displayName || user.blueskyHandle}</span>
                 <span className="app-sidebar-handle">@{user.blueskyHandle}</span>
               </div>
-            </div>
+            </Link>
           )}
 
           <button className="btn btn-primary app-sidebar-compose" onClick={() => setComposeOpen(true)}>
@@ -86,17 +101,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
           </button>
 
           <nav className="app-sidebar-nav">
-            <Link
-              href="/profile"
-              className={`app-sidebar-item${pathname === "/profile" ? " app-sidebar-active" : ""}`}
-              title="Profile"
-            >
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <circle cx="12" cy="8" r="4" />
-                <path d="M4 20c0-4 3.6-7 8-7s8 3 8 7" />
-              </svg>
-              <span className="app-sidebar-label">Profile</span>
-            </Link>
             <Link
               href="/timeline"
               className={`app-sidebar-item${pathname === "/timeline" || pathname.startsWith("/posts/") ? " app-sidebar-active" : ""}`}

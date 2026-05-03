@@ -33,6 +33,12 @@
   padding: 0;
 }
 
+html {
+  /* Reserve scrollbar space so the centered flex layout doesn't shift
+     when content grows past the viewport and a scrollbar appears. */
+  scrollbar-gutter: stable;
+}
+
 body {
   background: var(--color-bg);
   color: var(--color-text);
@@ -196,13 +202,25 @@ body {
   width: auto;
 }
 
-/* User profile in sidebar */
+/* User profile in sidebar (acts as the link to /profile) */
 .app-sidebar-profile {
   display: flex;
   align-items: center;
   justify-content: center;
   margin-bottom: 16px;
-  padding: 0 8px;
+  padding: 6px 8px;
+  border-radius: 10px;
+  text-decoration: none;
+  color: var(--color-text);
+  transition: background-color 0.15s;
+}
+
+.app-sidebar-profile:hover {
+  background: var(--color-surface-hover);
+}
+
+.app-sidebar-profile-active {
+  background: var(--color-surface);
 }
 
 .app-sidebar-avatar {
