@@ -78,12 +78,12 @@ export default function MentionsPage() {
     return data;
   }, []);
 
-  const refreshFeed = useCallback(async () => {
+  const refreshFeed = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
     sessionStorage.removeItem("mentions_cache");
     sessionStorage.removeItem("mentions_scroll");
-    setFetching(true);
+    if (!silent) setFetching(true);
     setFetchError(null);
 
     const controller = new AbortController();
@@ -114,7 +114,7 @@ export default function MentionsPage() {
       console.error("Mentions fetch error:", err);
     } finally {
       clearTimeout(timeout);
-      setFetching(false);
+      if (!silent) setFetching(false);
       setLoading(false);
       isFetchingRef.current = false;
     }
@@ -176,7 +176,9 @@ export default function MentionsPage() {
           if (savedScroll) pendingScrollRestore.current = parseInt(savedScroll);
           // Still kick off a background refresh so navigating in shows the
           // latest mentions; cached content paints first so there's no flicker.
-          refreshFeed();
+          // Silent — pull-to-refresh remains the only thing that surfaces
+          // the "Fetching..." indicator.
+          refreshFeed({ silent: true });
           return;
         }
       } catch { /* fall through */ }
