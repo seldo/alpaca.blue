@@ -34,16 +34,32 @@ export function usePullToRefresh(onRefresh: () => Promise<void>, disabled = fals
 
   useEffect(() => {
     // ── shared trigger ────────────────────────────────────────
+    // Bound the visible refresh state so a stuck onRefresh (network glitch,
+    // iOS PWA suspending timers in background, etc.) doesn't permanently
+    // gate future pulls. release() is idempotent so it's safe to call from
+    // both the timeout and the finally block.
     const trigger = async () => {
       if (refreshingRef.current) return;
       refreshingRef.current = true;
       setRefreshing(true);
       setPullDistance(0);
-      try {
-        await onRefreshRef.current();
-      } finally {
+
+      let released = false;
+      const release = () => {
+        if (released) return;
+        released = true;
         refreshingRef.current = false;
         setRefreshing(false);
+      };
+      const hardTimeout = setTimeout(release, 12_000);
+
+      try {
+        await onRefreshRef.current();
+      } catch (err) {
+        console.error("[usePullToRefresh] onRefresh threw:", err);
+      } finally {
+        clearTimeout(hardTimeout);
+        release();
       }
     };
 
