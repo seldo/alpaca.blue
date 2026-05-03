@@ -1272,7 +1272,14 @@ export async function fetchAndStoreBlueskyMentions(userId: number): Promise<{ st
   }
 
   const blueskyMentionPosts: BlueskyPostData[] = mentionNotifs.map((n) => {
-    const record = n.record as { text?: string; facets?: BlueskyFacet[]; reply?: { parent?: { uri?: string } } };
+    const record = n.record as {
+      text?: string;
+      facets?: BlueskyFacet[];
+      reply?: {
+        parent?: { uri?: string };
+        root?: { uri?: string; cid?: string };
+      };
+    };
     const text = record?.text || "";
     const hydrated = hydratedMap.get(n.uri);
     return {
@@ -1286,6 +1293,8 @@ export async function fetchAndStoreBlueskyMentions(userId: number): Promise<{ st
       contentHtml: facetsToHtml(text, record?.facets),
       createdAt: n.indexedAt,
       replyToUri: record?.reply?.parent?.uri || undefined,
+      threadRootUri: record?.reply?.root?.uri || undefined,
+      threadRootCid: record?.reply?.root?.cid || undefined,
       isMention: true,
       media: extractBlueskyMedia(hydrated?.embed),
       quotedPost: extractQuotedPost(hydrated?.embed),
