@@ -829,21 +829,6 @@ export async function queryPostsByIdentities(
 
   for (const post of rows) {
     const hash = post.dedupeHash;
-    if (hash && seen.has(hash)) {
-      const existingIdx = seen.get(hash)!;
-      const alreadyListed = result[existingIdx].alsoPostedOn.some((p) => p.platform === post.platform);
-      if (!alreadyListed) {
-        result[existingIdx].alsoPostedOn.push({
-          platform: post.platform,
-          postUrl: post.postUrl || null,
-          platformPostId: post.platformPostId,
-          platformPostCid: post.platformPostCid || null,
-          threadRootId: post.threadRootId || null,
-          threadRootCid: post.threadRootCid || null,
-        });
-      }
-      continue;
-    }
 
     const identity = identityMap.get(post.platformIdentityId);
     const replyToAuthor = post.replyToId ? (replyToAuthorMap.get(post.replyToId) ?? null) : null;
@@ -857,6 +842,8 @@ export async function queryPostsByIdentities(
       contentHtml: post.contentHtml,
       media: typeof post.media === "string" ? JSON.parse(post.media) : post.media,
       replyToId: post.replyToId,
+      threadRootId: post.threadRootId || null,
+      threadRootCid: post.threadRootCid || null,
       repostOfId: post.repostOfId,
       quotedPost: typeof post.quotedPost === "string" ? JSON.parse(post.quotedPost) : post.quotedPost,
       linkCard: typeof post.linkCard === "string" ? JSON.parse(post.linkCard) : (post.linkCard ?? null),
@@ -871,6 +858,41 @@ export async function queryPostsByIdentities(
       alsoPostedOn: [],
       replyToAuthor,
     };
+
+    if (hash && seen.has(hash)) {
+      const existingIdx = seen.get(hash)!;
+      const existing = result[existingIdx];
+
+      // Mastodon has no native quote primitive — prefer the Bluesky
+      // version as primary so the embedded quote actually renders.
+      const newIsBlueskyQuote = entry.platform === "bluesky" && !!entry.quotedPost;
+      const existingIsBlueskyQuote = existing.platform === "bluesky" && !!existing.quotedPost;
+
+      if (newIsBlueskyQuote && !existingIsBlueskyQuote) {
+        entry.alsoPostedOn = [
+          {
+            platform: existing.platform,
+            postUrl: existing.postUrl,
+            platformPostId: existing.platformPostId,
+            platformPostCid: existing.platformPostCid,
+            threadRootId: existing.threadRootId,
+            threadRootCid: existing.threadRootCid,
+          },
+          ...existing.alsoPostedOn,
+        ];
+        result[existingIdx] = entry;
+      } else if (!existing.alsoPostedOn.some((p) => p.platform === entry.platform)) {
+        existing.alsoPostedOn.push({
+          platform: entry.platform,
+          postUrl: entry.postUrl,
+          platformPostId: entry.platformPostId,
+          platformPostCid: entry.platformPostCid,
+          threadRootId: entry.threadRootId,
+          threadRootCid: entry.threadRootCid,
+        });
+      }
+      continue;
+    }
 
     if (hash) seen.set(hash, result.length);
     result.push(entry);
@@ -892,6 +914,8 @@ export interface ProfilePost {
   contentHtml: string | null;
   media: unknown;
   replyToId: string | null;
+  threadRootId: string | null;
+  threadRootCid: string | null;
   repostOfId: string | null;
   quotedPost: unknown;
   linkCard: LinkCardData | null;
@@ -975,23 +999,6 @@ export async function queryTimeline(
 
   for (const row of rows) {
     const hash = row.post.dedupeHash;
-    if (hash && seen.has(hash)) {
-      const existingIdx = seen.get(hash)!;
-      const alreadyListed = result[existingIdx].alsoPostedOn.some(
-        (p) => p.platform === row.post.platform
-      );
-      if (!alreadyListed) {
-        result[existingIdx].alsoPostedOn.push({
-          platform: row.post.platform,
-          postUrl: row.post.postUrl || null,
-          platformPostId: row.post.platformPostId,
-          platformPostCid: row.post.platformPostCid || null,
-          threadRootId: row.post.threadRootId || null,
-          threadRootCid: row.post.threadRootCid || null,
-        });
-      }
-      continue;
-    }
 
     const entry: TimelinePost = {
       id: row.post.id,
@@ -1019,6 +1026,42 @@ export async function queryTimeline(
       alsoPostedOn: [],
       replyToMe: type === "mentions" && !!row.post.replyToId,
     };
+
+    if (hash && seen.has(hash)) {
+      const existingIdx = seen.get(hash)!;
+      const existing = result[existingIdx];
+
+      // Mastodon has no native quote primitive — its mirror of a quote
+      // post is just "commentary + URL". Prefer the Bluesky version as
+      // primary so the embedded quote actually renders.
+      const newIsBlueskyQuote = entry.platform === "bluesky" && !!entry.quotedPost;
+      const existingIsBlueskyQuote = existing.platform === "bluesky" && !!existing.quotedPost;
+
+      if (newIsBlueskyQuote && !existingIsBlueskyQuote) {
+        entry.alsoPostedOn = [
+          {
+            platform: existing.platform,
+            postUrl: existing.postUrl,
+            platformPostId: existing.platformPostId,
+            platformPostCid: existing.platformPostCid,
+            threadRootId: existing.threadRootId,
+            threadRootCid: existing.threadRootCid,
+          },
+          ...existing.alsoPostedOn,
+        ];
+        result[existingIdx] = entry;
+      } else if (!existing.alsoPostedOn.some((p) => p.platform === entry.platform)) {
+        existing.alsoPostedOn.push({
+          platform: entry.platform,
+          postUrl: entry.postUrl,
+          platformPostId: entry.platformPostId,
+          platformPostCid: entry.platformPostCid,
+          threadRootId: entry.threadRootId,
+          threadRootCid: entry.threadRootCid,
+        });
+      }
+      continue;
+    }
 
     if (hash) seen.set(hash, result.length);
     result.push(entry);

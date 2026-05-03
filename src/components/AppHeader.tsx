@@ -3,7 +3,7 @@
 import { useState, useEffect, type ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
-import { CreatePost, type ReplyTarget } from "@/components/CreatePost";
+import { CreatePost, type ReplyTarget, type QuoteTarget } from "@/components/CreatePost";
 
 interface UserInfo {
   id: number;
@@ -37,6 +37,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserInfo | null>(cachedUser);
   const [composeOpen, setComposeOpen] = useState(false);
   const [composeReplyTo, setComposeReplyTo] = useState<ReplyTarget | undefined>(undefined);
+  const [composeQuoteOf, setComposeQuoteOf] = useState<QuoteTarget | undefined>(undefined);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const router = useRouter();
   const pathname = usePathname();
@@ -53,12 +54,14 @@ export function AppLayout({ children }: { children: ReactNode }) {
   }, []);
 
   // Listen for compose:open events fired by other components (e.g. PostCard
-  // reply buttons). detail.replyTo is optional — when present, the compose
-  // view opens in reply mode with the parent post shown at the top.
+  // reply / quote buttons). detail.replyTo or detail.quoteOf is optional —
+  // when one is present, the compose view opens in that mode with the
+  // referenced post shown at the top.
   useEffect(() => {
     function handler(e: Event) {
-      const detail = (e as CustomEvent<{ replyTo?: ReplyTarget }>).detail;
+      const detail = (e as CustomEvent<{ replyTo?: ReplyTarget; quoteOf?: QuoteTarget }>).detail;
       setComposeReplyTo(detail?.replyTo);
+      setComposeQuoteOf(detail?.quoteOf);
       setComposeOpen(true);
     }
     window.addEventListener("compose:open", handler);
@@ -68,6 +71,7 @@ export function AppLayout({ children }: { children: ReactNode }) {
   function closeCompose() {
     setComposeOpen(false);
     setComposeReplyTo(undefined);
+    setComposeQuoteOf(undefined);
   }
 
   // Close drawer on route change.
@@ -249,9 +253,12 @@ export function AppLayout({ children }: { children: ReactNode }) {
       {composeOpen && (
         <div className="create-post-modal-backdrop" onClick={closeCompose}>
           <div className="create-post-modal" onClick={(e) => e.stopPropagation()}>
-            <p className="create-post-modal-title">{composeReplyTo ? "Reply" : "New Post"}</p>
+            <p className="create-post-modal-title">
+              {composeReplyTo ? "Reply" : composeQuoteOf ? "Quote post" : "New Post"}
+            </p>
             <CreatePost
               replyTo={composeReplyTo}
+              quoteOf={composeQuoteOf}
               onClose={closeCompose}
               onPosted={closeCompose}
             />

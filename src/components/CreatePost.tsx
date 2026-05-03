@@ -7,6 +7,7 @@ export interface ReplyTarget {
   platform: string;
   platformPostId: string;
   platformPostCid: string | null;
+  postUrl: string | null;
   threadRootId: string | null;
   threadRootCid: string | null;
   content: string | null;
@@ -15,6 +16,7 @@ export interface ReplyTarget {
   authorAvatar: string | null;
   alsoPostedOn: Array<{
     platform: string;
+    postUrl: string | null;
     platformPostId: string;
     platformPostCid: string | null;
     threadRootId: string | null;
@@ -22,15 +24,34 @@ export interface ReplyTarget {
   }>;
 }
 
+// Same data shape as ReplyTarget — re-using the type rather than coining
+// a separate one. Replies and quotes both reference an existing post and
+// need the same metadata to fan out cross-platform.
+export type QuoteTarget = ReplyTarget;
+
 interface CreatePostProps {
   onClose?: () => void;
   onPosted?: () => void;
   replyTo?: ReplyTarget;
+  quoteOf?: QuoteTarget;
 }
 
 interface ResolvedReplyTargets {
   bluesky?: { uri: string; cid: string; threadRootId: string | null; threadRootCid: string | null };
   mastodon?: { statusId: string };
+}
+
+// For native Bluesky quote embeds we need a {uri, cid} pair. Prefer the
+// primary post if it's on Bluesky; otherwise look for a Bluesky mirror.
+function findBlueskyQuoteTarget(quoteOf: QuoteTarget): { uri: string; cid: string } | null {
+  if (quoteOf.platform === "bluesky" && quoteOf.platformPostCid) {
+    return { uri: quoteOf.platformPostId, cid: quoteOf.platformPostCid };
+  }
+  const mirror = quoteOf.alsoPostedOn?.find((p) => p.platform === "bluesky");
+  if (mirror?.platformPostCid) {
+    return { uri: mirror.platformPostId, cid: mirror.platformPostCid };
+  }
+  return null;
 }
 
 function computeReplyTargets(replyTo: ReplyTarget | undefined): ResolvedReplyTargets {
@@ -119,7 +140,7 @@ async function compressImage(file: File): Promise<File> {
   });
 }
 
-export function CreatePost({ onClose, onPosted, replyTo }: CreatePostProps) {
+export function CreatePost({ onClose, onPosted, replyTo, quoteOf }: CreatePostProps) {
   const [text, setText] = useState("");
   const [images, setImages] = useState<File[]>([]);
   const [previews, setPreviews] = useState<string[]>([]);
@@ -201,11 +222,15 @@ export function CreatePost({ onClose, onPosted, replyTo }: CreatePostProps) {
     const results: string[] = [];
     const errors: string[] = [];
     const isReply = !!replyTo;
+    const isQuote = !!quoteOf;
     const { bluesky: bsReplyTarget, mastodon: mastoReplyTarget } = replyTargets;
+    const bsQuoteTarget = isQuote ? findBlueskyQuoteTarget(quoteOf!) : null;
 
     async function postToBluesky(blueskyImages?: { image: unknown; alt: string }[]): Promise<boolean> {
-      const body: Record<string, unknown> = { text: content };
-      if (blueskyImages && blueskyImages.length > 0) body.images = blueskyImages;
+      const body: Record<string, unknown> = {};
+      let textBody = content;
+      const hasImages = !!(blueskyImages && blueskyImages.length > 0);
+
       if (bsReplyTarget) {
         body.replyTo = { uri: bsReplyTarget.uri, cid: bsReplyTarget.cid };
         body.replyRoot =
@@ -213,6 +238,21 @@ export function CreatePost({ onClose, onPosted, replyTo }: CreatePostProps) {
             ? { uri: bsReplyTarget.threadRootId, cid: bsReplyTarget.threadRootCid }
             : { uri: bsReplyTarget.uri, cid: bsReplyTarget.cid };
       }
+
+      if (isQuote) {
+        // Bluesky allows a single embed per post — native quote and images
+        // are mutually exclusive. Native quote when possible, otherwise
+        // append the URL.
+        if (bsQuoteTarget && !hasImages) {
+          body.quote = { uri: bsQuoteTarget.uri, cid: bsQuoteTarget.cid };
+        } else if (quoteOf!.postUrl) {
+          textBody = `${textBody}\n\n${quoteOf!.postUrl}`.trim();
+        }
+      }
+
+      body.text = textBody;
+      if (hasImages) body.images = blueskyImages;
+
       const res = await fetch("/api/bluesky/post", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -222,9 +262,23 @@ export function CreatePost({ onClose, onPosted, replyTo }: CreatePostProps) {
     }
 
     async function postToMastodon(mediaIds?: string[]): Promise<boolean> {
-      const body: Record<string, unknown> = { content };
-      if (mediaIds && mediaIds.length > 0) body.mediaIds = mediaIds;
+      const body: Record<string, unknown> = {};
+      let textBody = content;
+
       if (mastoReplyTarget) body.inReplyToId = mastoReplyTarget.statusId;
+
+      if (isQuote) {
+        // Mastodon has no native quote — always append the URL.
+        const mastodonMirror = quoteOf!.platform === "mastodon"
+          ? { postUrl: quoteOf!.postUrl }
+          : quoteOf!.alsoPostedOn?.find((p) => p.platform === "mastodon");
+        const url = mastodonMirror?.postUrl ?? quoteOf!.postUrl;
+        if (url) textBody = `${textBody}\n\n${url}`.trim();
+      }
+
+      body.content = textBody;
+      if (mediaIds && mediaIds.length > 0) body.mediaIds = mediaIds;
+
       const res = await fetch("/api/posts/create", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -233,8 +287,10 @@ export function CreatePost({ onClose, onPosted, replyTo }: CreatePostProps) {
       return res.ok;
     }
 
-    // Determine which platforms to send to. For replies, only platforms
-    // where we have a corresponding target. For new posts, both.
+    // Determine which platforms to send to:
+    // - Replies: only platforms where we have a corresponding target
+    //   (you can't reply where there's no thread to graft onto).
+    // - Quotes and new posts: both platforms (the user is broadcasting).
     const sendToBluesky = isReply ? !!bsReplyTarget : true;
     const sendToMastodon = isReply ? !!mastoReplyTarget : true;
 
@@ -321,29 +377,41 @@ export function CreatePost({ onClose, onPosted, replyTo }: CreatePostProps) {
     );
   }
 
+  const reference = replyTo ?? quoteOf;
+
   return (
     <form onSubmit={handleSubmit} className="create-post-form">
-      {replyTo && (
+      {reference && (
         <>
           <div className="create-post-reply-target">
-            {replyTo.authorAvatar && (
-              <img src={replyTo.authorAvatar} alt="" className="create-post-reply-avatar" />
+            {reference.authorAvatar && (
+              <img src={reference.authorAvatar} alt="" className="create-post-reply-avatar" />
             )}
             <div className="create-post-reply-body">
               <div className="create-post-reply-author">
-                {replyTo.authorDisplayName || replyTo.authorHandle}
+                {reference.authorDisplayName || reference.authorHandle}
               </div>
-              {replyTo.content && (
-                <div className="create-post-reply-text">{replyTo.content}</div>
+              {reference.content && (
+                <div className="create-post-reply-text">{reference.content}</div>
               )}
             </div>
           </div>
-          <ReplyTargetsIndicator targets={replyTargets} />
+          <FanoutIndicator
+            verb={replyTo ? "Replying" : "Quoting"}
+            platforms={
+              replyTo
+                ? ([
+                    ...(replyTargets.bluesky ? ["bluesky" as const] : []),
+                    ...(replyTargets.mastodon ? ["mastodon" as const] : []),
+                  ])
+                : (["bluesky", "mastodon"] as const)
+            }
+          />
         </>
       )}
       <textarea
         className="post-reply-input create-post-input"
-        placeholder={replyTo ? "Write your reply…" : "What's up?"}
+        placeholder={replyTo ? "Write your reply…" : quoteOf ? "Add your comment…" : "What's up?"}
         value={text}
         onChange={(e) => { setText(e.target.value); setError(null); }}
         rows={4}
@@ -424,7 +492,7 @@ export function CreatePost({ onClose, onPosted, replyTo }: CreatePostProps) {
             </button>
           )}
           <button type="submit" className="btn btn-primary" disabled={!canPost}>
-            {posting ? "Posting..." : "Post"}
+            {posting ? "Posting..." : replyTo ? "Reply" : quoteOf ? "Quote" : "Post"}
           </button>
         </div>
       </div>
@@ -432,23 +500,26 @@ export function CreatePost({ onClose, onPosted, replyTo }: CreatePostProps) {
   );
 }
 
-function ReplyTargetsIndicator({ targets }: { targets: ResolvedReplyTargets }) {
-  const platforms: Array<{ key: "bluesky" | "mastodon"; label: string; badge: string }> = [];
-  if (targets.bluesky) platforms.push({ key: "bluesky", label: "Bluesky", badge: "B" });
-  if (targets.mastodon) platforms.push({ key: "mastodon", label: "Mastodon", badge: "M" });
+function FanoutIndicator({
+  verb,
+  platforms,
+}: {
+  verb: string;
+  platforms: ReadonlyArray<"bluesky" | "mastodon">;
+}) {
   if (platforms.length === 0) return null;
-
-  const labels = platforms.map((p) => p.label);
+  const meta = { bluesky: { label: "Bluesky", badge: "B" }, mastodon: { label: "Mastodon", badge: "M" } } as const;
+  const labels = platforms.map((p) => meta[p].label);
   const text =
     labels.length === 1
-      ? `Replying on ${labels[0]}`
-      : `Replying on ${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
+      ? `${verb} on ${labels[0]}`
+      : `${verb} on ${labels.slice(0, -1).join(", ")} and ${labels[labels.length - 1]}`;
 
   return (
     <div className="create-post-reply-targets">
       {platforms.map((p) => (
-        <span key={p.key} className={`platform-badge ${p.key}`} title={p.label}>
-          {p.badge}
+        <span key={p} className={`platform-badge ${p}`} title={meta[p].label}>
+          {meta[p].badge}
         </span>
       ))}
       <span className="create-post-reply-targets-text">{text}</span>

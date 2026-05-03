@@ -252,10 +252,6 @@ export function PostCard({ post }: { post: PostData }) {
   const [localRepostCount, setLocalRepostCount] = useState(post.repostCount || 0);
   const [reposting, setReposting] = useState(false);
   const [repostMenuOpen, setRepostMenuOpen] = useState(false);
-  const [quoteOpen, setQuoteOpen] = useState(false);
-  const [quoteText, setQuoteText] = useState("");
-  const [quoting, setQuoting] = useState(false);
-  const [quoteSuccess, setQuoteSuccess] = useState(false);
 
   const openImageModal = useCallback(
     (images: Array<{ url: string; alt: string }>, index: number, e: React.MouseEvent) => {
@@ -324,6 +320,7 @@ export function PostCard({ post }: { post: PostData }) {
             platform: post.platform,
             platformPostId: post.platformPostId,
             platformPostCid: post.platformPostCid ?? null,
+            postUrl: post.postUrl ?? null,
             threadRootId: post.threadRootId ?? null,
             threadRootCid: post.threadRootCid ?? null,
             content: post.content,
@@ -332,6 +329,7 @@ export function PostCard({ post }: { post: PostData }) {
             authorAvatar: post.author?.avatarUrl ?? null,
             alsoPostedOn: (post.alsoPostedOn || []).map((cp) => ({
               platform: cp.platform,
+              postUrl: cp.postUrl,
               platformPostId: cp.platformPostId,
               platformPostCid: cp.platformPostCid,
               threadRootId: cp.threadRootId,
@@ -431,89 +429,33 @@ export function PostCard({ post }: { post: PostData }) {
   function handleQuoteOpen(e: React.MouseEvent) {
     e.stopPropagation();
     setRepostMenuOpen(false);
-    if (quoteSuccess) {
-      setQuoteSuccess(false);
-      setQuoteText("");
-    }
-    setQuoteOpen(!quoteOpen);
-  }
-
-  async function handleQuoteSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    e.stopPropagation();
-    if (quoting || !quoteText.trim()) return;
-    setQuoting(true);
-
-    const text = quoteText.trim();
-    let primaryOk = false;
-
-    try {
-      if (post.platform === "bluesky") {
-        if (!post.platformPostCid) {
-          console.warn("Cannot quote: missing CID");
-          return;
-        }
-        const res = await fetch("/api/bluesky/post", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            text,
-            quote: { uri: post.platformPostId, cid: post.platformPostCid },
-          }),
-        });
-        primaryOk = res.ok;
-      } else if (post.platform === "mastodon") {
-        // Mastodon doesn't support native quote posts — post as a standalone status with the URL
-        const postLink = post.postUrl || "";
-        const fullText = `${text}\n\n${postLink}`.trim();
-        const res = await fetch(`/api/posts/${post.id}/reply`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content: fullText, quote: true }),
-        });
-        primaryOk = res.ok;
-      }
-
-      // Cross-platform fanout. Bluesky supports native quote-of-mirror;
-      // Mastodon never supports native quotes, so always commentary + link.
-      const otherPlatform = post.platform === "bluesky" ? "mastodon" : "bluesky";
-      const mirror = post.alsoPostedOn?.find((p) => p.platform === otherPlatform);
-      const linkUrl = mirror?.postUrl || post.postUrl;
-
-      if (otherPlatform === "bluesky") {
-        if (mirror?.platformPostCid) {
-          await fetch("/api/bluesky/post", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              text,
-              quote: { uri: mirror.platformPostId, cid: mirror.platformPostCid },
-            }),
-          }).catch(() => {});
-        } else if (linkUrl) {
-          await fetch("/api/bluesky/post", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: `${text}\n\n${linkUrl}`.trim() }),
-          }).catch(() => {});
-        }
-      } else if (otherPlatform === "mastodon" && linkUrl) {
-        await fetch("/api/posts/create", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ content: `${text}\n\n${linkUrl}`.trim() }),
-        }).catch(() => {});
-      }
-
-      if (primaryOk) {
-        setQuoteSuccess(true);
-        setQuoteText("");
-      }
-    } catch (err) {
-      console.error("Quote error:", err);
-    } finally {
-      setQuoting(false);
-    }
+    window.dispatchEvent(
+      new CustomEvent("compose:open", {
+        detail: {
+          quoteOf: {
+            id: post.id,
+            platform: post.platform,
+            platformPostId: post.platformPostId,
+            platformPostCid: post.platformPostCid ?? null,
+            postUrl: post.postUrl ?? null,
+            threadRootId: post.threadRootId ?? null,
+            threadRootCid: post.threadRootCid ?? null,
+            content: post.content,
+            authorHandle: post.author?.handle ?? null,
+            authorDisplayName: post.author?.displayName ?? null,
+            authorAvatar: post.author?.avatarUrl ?? null,
+            alsoPostedOn: (post.alsoPostedOn || []).map((cp) => ({
+              platform: cp.platform,
+              postUrl: cp.postUrl,
+              platformPostId: cp.platformPostId,
+              platformPostCid: cp.platformPostCid,
+              threadRootId: cp.threadRootId,
+              threadRootCid: cp.threadRootCid,
+            })),
+          },
+        },
+      })
+    );
   }
 
   // Close repost menu when clicking outside
@@ -836,63 +778,6 @@ export function PostCard({ post }: { post: PostData }) {
       </div>
 
 
-      {quoteOpen && (
-        <div className="post-quote-composer" onClick={(e) => e.stopPropagation()}>
-          {quoteSuccess ? (
-            <div className="post-reply-success">
-              Quote posted!
-              <button
-                className="post-reply-success-close"
-                onClick={(e) => { e.stopPropagation(); setQuoteOpen(false); setQuoteSuccess(false); }}
-              >
-                Dismiss
-              </button>
-            </div>
-          ) : (
-            <form onSubmit={handleQuoteSubmit} className="post-reply-form">
-              <div className="post-quote-preview">
-                <span className="post-quote-preview-author">
-                  {post.author?.displayName || post.author?.handle}
-                </span>
-                <span className="post-quote-preview-text">
-                  {(post.content || "").slice(0, 100)}{(post.content || "").length > 100 ? "..." : ""}
-                </span>
-              </div>
-              <textarea
-                className="post-reply-input"
-                placeholder={`Add your comment${post.platform === "mastodon" ? " (link will be appended)" : ""}...`}
-                value={quoteText}
-                onChange={(e) => setQuoteText(e.target.value)}
-                rows={3}
-                maxLength={post.platform === "bluesky" ? 300 : 500}
-                disabled={quoting}
-                autoFocus
-              />
-              <div className="post-reply-actions">
-                <span className="post-reply-charcount">
-                  {quoteText.length}/{post.platform === "bluesky" ? 300 : 500}
-                </span>
-                <div style={{ display: "flex", gap: "8px" }}>
-                  <button
-                    type="button"
-                    className="btn btn-outline"
-                    onClick={(e) => { e.stopPropagation(); setQuoteOpen(false); }}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    type="submit"
-                    className="btn btn-primary post-reply-submit"
-                    disabled={quoting || !quoteText.trim()}
-                  >
-                    {quoting ? "Posting..." : "Quote"}
-                  </button>
-                </div>
-              </div>
-            </form>
-          )}
-        </div>
-      )}
 
       {modalState && (
         <ImageModal
