@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react
 import { useParams, useRouter } from "next/navigation";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
+import { Avatar } from "@/components/Avatar";
 import { usePullToRefresh } from "@/lib/usePullToRefresh";
 
 interface Identity {
@@ -190,7 +191,7 @@ export default function IdentityPage() {
           <section className="section">
             <div className="person-identity-row" style={{ gap: "12px", padding: "8px 0" }}>
               {identity.avatarUrl && (
-                <img src={identity.avatarUrl} alt="" className="person-identity-avatar" style={{ width: 48, height: 48 }} />
+                <Avatar identityId={identity.id} src={identity.avatarUrl} className="person-identity-avatar" style={{ width: 48, height: 48 }} />
               )}
               <div>
                 <div style={{ fontWeight: 600, fontSize: "1.1rem" }}>{displayName}</div>

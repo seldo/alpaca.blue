@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { Avatar } from "@/components/Avatar";
 
 function ImageModal({
   images,
@@ -538,10 +539,10 @@ export function PostCard({ post }: { post: PostData }) {
         {author?.avatarUrl && (
           avatarLink ? (
             <a href={avatarLink} onClick={(e) => e.stopPropagation()}>
-              <img src={author.avatarUrl} alt="" className="post-avatar" />
+              <Avatar identityId={author.id} src={author.avatarUrl} className="post-avatar" />
             </a>
           ) : (
-            <img src={author.avatarUrl} alt="" className="post-avatar" />
+            <Avatar identityId={author.id} src={author.avatarUrl} className="post-avatar" />
           )
         )}
         <div className="post-author-info">

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react
 import { useParams, useRouter } from "next/navigation";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
+import { Avatar } from "@/components/Avatar";
 import { usePullToRefresh } from "@/lib/usePullToRefresh";
 
 interface Identity {
@@ -207,9 +208,9 @@ export default function PersonPage() {
                 {identities.map((i) => (
                   <div key={i.id} className="person-identity-row">
                     {i.avatarUrl && (
-                      <img
+                      <Avatar
+                        identityId={i.id}
                         src={i.avatarUrl}
-                        alt=""
                         className="person-identity-avatar"
                       />
                     )}
