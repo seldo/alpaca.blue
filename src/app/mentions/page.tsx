@@ -174,6 +174,9 @@ export default function MentionsPage() {
           setLoading(false);
           const savedScroll = sessionStorage.getItem("mentions_scroll");
           if (savedScroll) pendingScrollRestore.current = parseInt(savedScroll);
+          // Still kick off a background refresh so navigating in shows the
+          // latest mentions; cached content paints first so there's no flicker.
+          refreshFeed();
           return;
         }
       } catch { /* fall through */ }

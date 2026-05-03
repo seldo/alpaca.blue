@@ -172,6 +172,9 @@ export default function TimelinePage() {
           setLoading(false);
           const savedScroll = sessionStorage.getItem("timeline_scroll");
           if (savedScroll) pendingScrollRestore.current = parseInt(savedScroll);
+          // Still kick off a background refresh so navigating in shows the
+          // latest posts; cached content paints first so there's no flicker.
+          refreshFeed();
           return;
         }
       } catch { /* fall through */ }
