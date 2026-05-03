@@ -354,13 +354,15 @@ export function PostCard({ post }: { post: PostData }) {
     if (reposting) return;
     setReposting(true);
 
+    const isUndo = reposted;
+
     try {
       if (post.platform === "bluesky") {
         if (!post.platformPostCid) {
           console.warn("Cannot repost: missing CID");
           return;
         }
-        if (reposted) return; // Can't undo Bluesky reposts without stored URI
+        if (isUndo) return; // Can't undo Bluesky reposts without stored URI
         await fetch("/api/bluesky/repost", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -372,12 +374,51 @@ export function PostCard({ post }: { post: PostData }) {
         const res = await fetch(`/api/posts/${post.id}/repost`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ undo: reposted }),
+          body: JSON.stringify({ undo: isUndo }),
         });
         if (res.ok) {
           const data = await res.json();
           setReposted(data.reblogged);
           setLocalRepostCount(data.repostCount);
+        }
+      }
+
+      // Cross-platform fanout — only on initial repost, not undo. If the
+      // post has a mirror on the other platform, native-repost the mirror;
+      // otherwise post the original platform's URL as a status.
+      if (!isUndo && post.postUrl) {
+        const otherPlatform = post.platform === "bluesky" ? "mastodon" : "bluesky";
+        const mirror = post.alsoPostedOn?.find((p) => p.platform === otherPlatform);
+
+        if (otherPlatform === "bluesky") {
+          if (mirror?.platformPostCid) {
+            await fetch("/api/bluesky/repost", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ uri: mirror.platformPostId, cid: mirror.platformPostCid }),
+            }).catch(() => {});
+          } else {
+            await fetch("/api/bluesky/post", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ text: post.postUrl }),
+            }).catch(() => {});
+          }
+        } else {
+          // otherPlatform === "mastodon"
+          if (mirror) {
+            await fetch("/api/mastodon/repost", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ statusId: mirror.platformPostId }),
+            }).catch(() => {});
+          } else {
+            await fetch("/api/posts/create", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ content: post.postUrl }),
+            }).catch(() => {});
+          }
         }
       }
     } catch (err) {
@@ -403,6 +444,9 @@ export function PostCard({ post }: { post: PostData }) {
     if (quoting || !quoteText.trim()) return;
     setQuoting(true);
 
+    const text = quoteText.trim();
+    let primaryOk = false;
+
     try {
       if (post.platform === "bluesky") {
         if (!post.platformPostCid) {
@@ -413,27 +457,57 @@ export function PostCard({ post }: { post: PostData }) {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-            text: quoteText.trim(),
+            text,
             quote: { uri: post.platformPostId, cid: post.platformPostCid },
           }),
         });
-        if (res.ok) {
-          setQuoteSuccess(true);
-          setQuoteText("");
-        }
+        primaryOk = res.ok;
       } else if (post.platform === "mastodon") {
         // Mastodon doesn't support native quote posts — post as a standalone status with the URL
         const postLink = post.postUrl || "";
-        const fullText = `${quoteText.trim()}\n\n${postLink}`.trim();
+        const fullText = `${text}\n\n${postLink}`.trim();
         const res = await fetch(`/api/posts/${post.id}/reply`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ content: fullText, quote: true }),
         });
-        if (res.ok) {
-          setQuoteSuccess(true);
-          setQuoteText("");
+        primaryOk = res.ok;
+      }
+
+      // Cross-platform fanout. Bluesky supports native quote-of-mirror;
+      // Mastodon never supports native quotes, so always commentary + link.
+      const otherPlatform = post.platform === "bluesky" ? "mastodon" : "bluesky";
+      const mirror = post.alsoPostedOn?.find((p) => p.platform === otherPlatform);
+      const linkUrl = mirror?.postUrl || post.postUrl;
+
+      if (otherPlatform === "bluesky") {
+        if (mirror?.platformPostCid) {
+          await fetch("/api/bluesky/post", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              text,
+              quote: { uri: mirror.platformPostId, cid: mirror.platformPostCid },
+            }),
+          }).catch(() => {});
+        } else if (linkUrl) {
+          await fetch("/api/bluesky/post", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ text: `${text}\n\n${linkUrl}`.trim() }),
+          }).catch(() => {});
         }
+      } else if (otherPlatform === "mastodon" && linkUrl) {
+        await fetch("/api/posts/create", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ content: `${text}\n\n${linkUrl}`.trim() }),
+        }).catch(() => {});
+      }
+
+      if (primaryOk) {
+        setQuoteSuccess(true);
+        setQuoteText("");
       }
     } catch (err) {
       console.error("Quote error:", err);
