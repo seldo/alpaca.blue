@@ -23,6 +23,7 @@ export async function GET() {
 
     return NextResponse.json(accounts);
   } catch (error) {
+    console.error("[api/accounts] error:", error);
     return NextResponse.json(
       { error: "Failed to fetch accounts" },
       { status: 500 }

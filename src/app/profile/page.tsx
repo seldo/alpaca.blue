@@ -79,11 +79,11 @@ export default function ProfilePage() {
 
   useEffect(() => {
     Promise.all([
-      fetch("/api/auth/me").then((r) => r.json()),
-      fetch("/api/accounts").then((r) => r.json()),
+      fetch("/api/auth/me").then((r) => (r.ok ? r.json() : null)),
+      fetch("/api/accounts").then((r) => (r.ok ? r.json() : [])),
     ]).then(([me, accts]) => {
       setUser(me);
-      setAccounts(accts);
+      setAccounts(Array.isArray(accts) ? accts : []);
     }).catch(() => {});
 
     refreshPosts();
