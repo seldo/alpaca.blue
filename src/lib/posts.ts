@@ -189,6 +189,8 @@ export async function storeBlueskyPosts(
     if (!identity) continue; // Skip timeline posts from unknown authors
 
     const media = post.media;
+    const rkey = post.uri.split("/").pop();
+    const postUrl = rkey ? `https://bsky.app/profile/${post.authorHandle}/post/${rkey}` : null;
     rows.push({
       userId,
       isTimeline: !post.isMention,
@@ -197,6 +199,7 @@ export async function storeBlueskyPosts(
       platform: "bluesky" as const,
       platformPostId: post.uri,
       platformPostCid: post.cid || null,
+      postUrl,
       content: post.text || "",
       contentHtml: post.contentHtml || null,
       media: media && media.length > 0 ? media : null,
@@ -223,6 +226,7 @@ export async function storeBlueskyPosts(
         content: sql`values(${posts.content})`,
         contentHtml: sql`values(${posts.contentHtml})`,
         platformPostCid: sql`values(${posts.platformPostCid})`,
+        postUrl: sql`values(${posts.postUrl})`,
         media: sql`values(${posts.media})`,
         quotedPost: sql`values(${posts.quotedPost})`,
         linkCard: sql`values(${posts.linkCard})`,
