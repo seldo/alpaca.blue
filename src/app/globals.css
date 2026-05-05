@@ -2060,7 +2060,13 @@ a.post-timestamp:hover {
 
 .create-post-modal-backdrop {
   position: fixed;
-  inset: 0;
+  /* --vvh / --vv-offset come from AppHeader's visualViewport listener so the
+     backdrop tracks the visible area when the soft keyboard is open. They
+     fall back to the full layout viewport on browsers without the API. */
+  top: var(--vv-offset, 0);
+  left: 0;
+  right: 0;
+  height: var(--vvh, 100dvh);
   background: rgba(0, 0, 0, 0.4);
   display: flex;
   align-items: flex-start;
@@ -2165,7 +2171,10 @@ a.post-timestamp:hover {
 
   .create-post-modal {
     max-width: none;
-    height: 80vh;
+    /* Backdrop is sized to the visual viewport, so 80% follows the
+       keyboard-adjusted area: the action bar always sits just above the
+       keyboard, and a strip at the top stays tappable to dismiss. */
+    height: 80%;
     border-radius: 16px 16px 0 0;
     padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
     box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.18);

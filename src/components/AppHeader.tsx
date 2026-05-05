@@ -74,6 +74,32 @@ export function AppLayout({ children }: { children: ReactNode }) {
     setComposeQuoteOf(undefined);
   }
 
+  // Track the visual viewport while the compose modal is open. On iOS (and
+  // Android with the default interactive-widget mode) the soft keyboard
+  // shrinks the visual viewport without shrinking the layout viewport, so
+  // `100vh`/`100dvh` and `position: fixed` sit behind the keyboard. We mirror
+  // visualViewport.height / offsetTop into CSS variables that the compose
+  // backdrop reads, so the modal stays pinned above the keyboard.
+  useEffect(() => {
+    if (!composeOpen) return;
+    const vv = window.visualViewport;
+    if (!vv) return;
+    const root = document.documentElement;
+    function update() {
+      root.style.setProperty("--vvh", `${vv!.height}px`);
+      root.style.setProperty("--vv-offset", `${vv!.offsetTop}px`);
+    }
+    update();
+    vv.addEventListener("resize", update);
+    vv.addEventListener("scroll", update);
+    return () => {
+      vv.removeEventListener("resize", update);
+      vv.removeEventListener("scroll", update);
+      root.style.removeProperty("--vvh");
+      root.style.removeProperty("--vv-offset");
+    };
+  }, [composeOpen]);
+
   // Close drawer on route change.
   const [prevPathname, setPrevPathname] = useState(pathname);
   if (prevPathname !== pathname) {
