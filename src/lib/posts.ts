@@ -1295,7 +1295,7 @@ export async function fetchAndStoreBlueskyMentions(userId: number): Promise<{ st
   }>;
 
   const mentionNotifs = notifications.filter(
-    (n) => n.reason === "mention" || n.reason === "reply"
+    (n) => n.reason === "mention" || n.reason === "reply" || n.reason === "quote"
   );
 
   // Hydrate with embed data via getPosts
@@ -1376,8 +1376,10 @@ export async function fetchBlueskyReactions(userId: number): Promise<RawReaction
     reasonSubject?: string;
   }>;
 
+  // Quote notifications are handled by the mentions path so the quote
+  // post itself renders as a PostCard with the quoted-post embed.
   const reactionNotifs = notifications.filter(
-    (n) => n.reason === "like" || n.reason === "repost" || n.reason === "follow" || n.reason === "quote"
+    (n) => n.reason === "like" || n.reason === "repost" || n.reason === "follow"
   );
 
   // Batch-fetch subject post text
