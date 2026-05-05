@@ -1345,6 +1345,7 @@ export async function fetchAndStoreBlueskyMentions(userId: number): Promise<{ st
       isMention: true,
       media: extractBlueskyMedia(hydrated?.embed),
       quotedPost: extractQuotedPost(hydrated?.embed),
+      linkCard: extractLinkCard(hydrated?.embed),
     };
   });
 
