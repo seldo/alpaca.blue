@@ -15,11 +15,22 @@ import { getServerBlueskyAgent } from "@/lib/bluesky-server";
 // ── Types ──────────────────────────────────────────────────
 
 export interface QuotedPostData {
+  // Stable platform identifier for the quoted post. AT URI for Bluesky,
+  // status URL (or AP URI) for Mastodon. Lookup uses this as the dedup key.
   uri: string;
+  // Set on new rows so renderers don't have to sniff the URI shape. Older
+  // rows (pre-Mastodon-quote-support) leave this undefined; Bluesky URIs
+  // start with at:// which is the fallback heuristic.
+  platform?: string;
+  // Canonical web URL when known — Mastodon quotes carry this directly.
+  postUrl?: string | null;
   authorHandle: string;
   authorDisplayName?: string;
   authorAvatar?: string;
+  // Plain-text rendition (used for dedup hashing / linkify fallback).
   text: string;
+  // Pre-rendered HTML when the source platform supplies it (Mastodon).
+  contentHtml?: string;
   media?: Array<{ type: string; url: string; alt: string; thumbnailUrl?: string }>;
   postedAt?: string;
 }
@@ -65,6 +76,13 @@ interface MastodonStatus {
   replies_count: number;
   in_reply_to_id: string | null;
   reblog: MastodonStatus | null;
+  // Mastodon 4.4+ native quote post. quoted_status is populated only when
+  // state === "accepted"; older instances or rejected/pending quotes leave
+  // it null. Older instances omit the field entirely.
+  quote?: {
+    state: "accepted" | "pending" | "rejected" | "revoked" | "deleted" | "unauthorized";
+    quoted_status: MastodonStatus | null;
+  } | null;
   account: {
     id: string;
     username: string;
@@ -79,6 +97,38 @@ interface MastodonStatus {
     preview_url?: string | null;
     description: string | null;
   }>;
+}
+
+// Builds a QuotedPostData for the native Mastodon quote post (Mastodon 4.4+).
+// Returns undefined when the post has no quote, the quote isn't accepted, or
+// the quoted status isn't included (pending/rejected/etc).
+function extractMastodonQuote(
+  status: MastodonStatus,
+  instanceHost: string,
+): QuotedPostData | undefined {
+  const q = status.quote;
+  if (!q || q.state !== "accepted" || !q.quoted_status) return undefined;
+  const qs = q.quoted_status;
+  const handle = qs.account.acct.includes("@")
+    ? `@${qs.account.acct}`
+    : `@${qs.account.acct}@${instanceHost}`;
+  return {
+    uri: qs.url || qs.id,
+    platform: "mastodon",
+    postUrl: qs.url || null,
+    authorHandle: handle,
+    authorDisplayName: qs.account.display_name || undefined,
+    authorAvatar: qs.account.avatar || undefined,
+    text: stripHtmlTags(qs.content),
+    contentHtml: qs.content,
+    media: qs.media_attachments.map((m) => ({
+      type: m.type,
+      url: m.url,
+      alt: m.description || "",
+      thumbnailUrl: m.preview_url || undefined,
+    })),
+    postedAt: qs.created_at,
+  };
 }
 
 // ── Dedup hash ─────────────────────────────────────────────
@@ -337,6 +387,7 @@ export async function fetchAndStoreMastodonPosts(
       media: media.length > 0 ? media : null,
       replyToId: actual.in_reply_to_id || null,
       repostOfId: status.reblog ? status.id : null,
+      quotedPost: extractMastodonQuote(actual, instanceHost) || null,
       likeCount: actual.favourites_count || 0,
       repostCount: actual.reblogs_count || 0,
       replyCount: actual.replies_count || 0,
@@ -353,6 +404,7 @@ export async function fetchAndStoreMastodonPosts(
         content: sql`values(${posts.content})`,
         contentHtml: sql`values(${posts.contentHtml})`,
         postUrl: sql`values(${posts.postUrl})`,
+        quotedPost: sql`values(${posts.quotedPost})`,
         likeCount: sql`values(${posts.likeCount})`,
         repostCount: sql`values(${posts.repostCount})`,
         replyCount: sql`values(${posts.replyCount})`,
@@ -493,6 +545,7 @@ export async function fetchAndStoreMastodonMentions(
       contentHtml: status.content,
       media: media.length > 0 ? media : null,
       replyToId: status.in_reply_to_id || null,
+      quotedPost: extractMastodonQuote(status, instanceHost) || null,
       likeCount: status.favourites_count || 0,
       repostCount: status.reblogs_count || 0,
       replyCount: status.replies_count || 0,
@@ -510,6 +563,7 @@ export async function fetchAndStoreMastodonMentions(
         contentHtml: sql`values(${posts.contentHtml})`,
         postUrl: sql`values(${posts.postUrl})`,
         replyToId: sql`values(${posts.replyToId})`,
+        quotedPost: sql`values(${posts.quotedPost})`,
         likeCount: sql`values(${posts.likeCount})`,
         repostCount: sql`values(${posts.repostCount})`,
         replyCount: sql`values(${posts.replyCount})`,
@@ -571,6 +625,7 @@ export async function fetchAndStoreOwnMastodonPosts(
   if (!response.ok) return { stored: 0, identityId: identity.id };
 
   const statuses: MastodonStatus[] = await response.json();
+  const instanceHost = new URL(account.instanceUrl).hostname;
 
   const rows = statuses.map((status) => {
     const actual = status.reblog || status;
@@ -589,6 +644,7 @@ export async function fetchAndStoreOwnMastodonPosts(
       media: media.length > 0 ? media : null,
       replyToId: actual.in_reply_to_id || null,
       repostOfId: status.reblog ? status.id : null,
+      quotedPost: extractMastodonQuote(actual, instanceHost) || null,
       likeCount: actual.favourites_count || 0,
       repostCount: actual.reblogs_count || 0,
       replyCount: actual.replies_count || 0,
@@ -603,6 +659,7 @@ export async function fetchAndStoreOwnMastodonPosts(
         content: sql`values(${posts.content})`,
         contentHtml: sql`values(${posts.contentHtml})`,
         postUrl: sql`values(${posts.postUrl})`,
+        quotedPost: sql`values(${posts.quotedPost})`,
         likeCount: sql`values(${posts.likeCount})`,
         repostCount: sql`values(${posts.repostCount})`,
         replyCount: sql`values(${posts.replyCount})`,
@@ -937,12 +994,15 @@ export async function queryPostsByIdentities(
       const existingIdx = seen.get(hash)!;
       const existing = result[existingIdx];
 
-      // Mastodon has no native quote primitive — prefer the Bluesky
-      // version as primary so the embedded quote actually renders.
-      const newIsBlueskyQuote = entry.platform === "bluesky" && !!entry.quotedPost;
-      const existingIsBlueskyQuote = existing.platform === "bluesky" && !!existing.quotedPost;
+      // Both Bluesky and Mastodon can carry native quoted posts now. When a
+      // cross-posted pair lands here, prefer whichever side has the embedded
+      // quote so the renderer can show the inline quote card instead of just
+      // a URL — typically the Bluesky side, since alpaca.blue authors quotes
+      // natively on Bluesky and falls back to URL on Mastodon.
+      const newHasQuote = !!entry.quotedPost;
+      const existingHasQuote = !!existing.quotedPost;
 
-      if (newIsBlueskyQuote && !existingIsBlueskyQuote) {
+      if (newHasQuote && !existingHasQuote) {
         entry.alsoPostedOn = [
           {
             platform: existing.platform,
@@ -1125,13 +1185,14 @@ export async function queryTimeline(
       const existingIdx = seen.get(hash)!;
       const existing = result[existingIdx];
 
-      // Mastodon has no native quote primitive — its mirror of a quote
-      // post is just "commentary + URL". Prefer the Bluesky version as
-      // primary so the embedded quote actually renders.
-      const newIsBlueskyQuote = entry.platform === "bluesky" && !!entry.quotedPost;
-      const existingIsBlueskyQuote = existing.platform === "bluesky" && !!existing.quotedPost;
+      // When a cross-posted pair collides, prefer whichever side has the
+      // embedded quote so the renderer can show the inline quote card
+      // instead of a bare URL. Mastodon 4.4+ supports native quotes too,
+      // so this isn't Bluesky-specific anymore.
+      const newHasQuote = !!entry.quotedPost;
+      const existingHasQuote = !!existing.quotedPost;
 
-      if (newIsBlueskyQuote && !existingIsBlueskyQuote) {
+      if (newHasQuote && !existingHasQuote) {
         entry.alsoPostedOn = [
           {
             platform: existing.platform,
@@ -1268,8 +1329,13 @@ function extractQuotedPost(embed: any): QuotedPostData | undefined {
   const record = embed.record?.record ?? embed.record;
   if (!record?.author || !record?.value) return undefined;
   if (record.$type && !record.$type.includes("viewRecord")) return undefined;
+  // Build the bsky.app web URL from the AT URI rkey for renderers that
+  // prefer postUrl (so they don't have to re-parse the AT URI).
+  const rkey = typeof record.uri === "string" ? record.uri.split("/").pop() : null;
   const quoted: QuotedPostData = {
     uri: record.uri,
+    platform: "bluesky",
+    postUrl: rkey ? `https://bsky.app/profile/${record.author.handle}/post/${rkey}` : null,
     authorHandle: record.author.handle,
     authorDisplayName: record.author.displayName || undefined,
     authorAvatar: record.author.avatar || undefined,
@@ -1611,6 +1677,7 @@ export async function fetchAndStoreMastodonAuthorPosts(
   if (!response.ok) return { stored: 0, cursor: null };
 
   const statuses: MastodonStatus[] = await response.json();
+  const instanceHost = new URL(instanceUrl).hostname;
 
   const [identity] = await db
     .select()
@@ -1647,6 +1714,7 @@ export async function fetchAndStoreMastodonAuthorPosts(
       media: media.length > 0 ? media : null,
       replyToId: status.in_reply_to_id || null,
       repostOfId: null,
+      quotedPost: extractMastodonQuote(status, instanceHost) || null,
       likeCount: status.favourites_count || 0,
       repostCount: status.reblogs_count || 0,
       replyCount: status.replies_count || 0,
@@ -1662,6 +1730,7 @@ export async function fetchAndStoreMastodonAuthorPosts(
         contentHtml: sql`values(${posts.contentHtml})`,
         postUrl: sql`values(${posts.postUrl})`,
         media: sql`values(${posts.media})`,
+        quotedPost: sql`values(${posts.quotedPost})`,
         likeCount: sql`values(${posts.likeCount})`,
         repostCount: sql`values(${posts.repostCount})`,
         replyCount: sql`values(${posts.replyCount})`,

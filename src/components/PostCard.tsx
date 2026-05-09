@@ -129,10 +129,13 @@ interface PostData {
   repostOfId: string | null;
   quotedPost: {
     uri: string;
+    platform?: string;
+    postUrl?: string | null;
     authorHandle: string;
     authorDisplayName?: string;
     authorAvatar?: string;
     text: string;
+    contentHtml?: string;
     media?: Array<{ type: string; url: string; alt: string; thumbnailUrl?: string }>;
     postedAt?: string;
   } | null;
@@ -187,13 +190,24 @@ function getProfileUrl(author: PostData["author"]): string | null {
 }
 
 function getQuotedPostUrl(quotedPost: NonNullable<PostData["quotedPost"]>): string | null {
+  // Mastodon (and recently-stored Bluesky) rows carry a canonical postUrl.
+  if (quotedPost.postUrl) return quotedPost.postUrl;
   if (!quotedPost.uri) return null;
-  // AT URI: at://did:plc:xxx/app.bsky.feed.post/rkey
+  // Older Bluesky rows: parse the AT URI to construct a bsky.app URL.
   const parts = quotedPost.uri.match(/^at:\/\/(did:[^/]+)\/app\.bsky\.feed\.post\/(.+)$/);
   if (parts) {
     return `https://bsky.app/profile/${quotedPost.authorHandle}/post/${parts[2]}`;
   }
+  // Mastodon rows use a status URL — uri is already a usable URL.
+  if (/^https?:\/\//.test(quotedPost.uri)) return quotedPost.uri;
   return null;
+}
+
+// Heuristic for older Bluesky rows where `platform` wasn't stored: AT URIs
+// always start with at://. Mastodon quoted posts use https://… URIs.
+function getQuotedPostPlatform(quotedPost: NonNullable<PostData["quotedPost"]>): string {
+  if (quotedPost.platform) return quotedPost.platform;
+  return quotedPost.uri.startsWith("at://") ? "bluesky" : "mastodon";
 }
 
 
@@ -663,6 +677,10 @@ export function PostCard({ post }: { post: PostData }) {
       {post.quotedPost && post.quotedPost.authorHandle && (() => {
         const qp = post.quotedPost;
         const qpUrl = getQuotedPostUrl(qp);
+        const qpPlatform = getQuotedPostPlatform(qp);
+        // Mastodon handles are stored as "@user@instance" — strip the leading
+        // @ so the rendered "@" prefix doesn't double up.
+        const qpHandleDisplay = qp.authorHandle.replace(/^@/, "");
 
         async function handleQuotedPostClick(e: React.MouseEvent) {
           e.stopPropagation();
@@ -677,10 +695,13 @@ export function PostCard({ post }: { post: PostData }) {
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({
                 uri: qp.uri,
+                platform: qpPlatform,
+                postUrl: qp.postUrl,
                 authorHandle: qp.authorHandle,
                 authorDisplayName: qp.authorDisplayName,
                 authorAvatar: qp.authorAvatar,
                 text: qp.text,
+                contentHtml: qp.contentHtml,
                 media: qp.media,
                 postedAt: qp.postedAt,
               }),
@@ -702,15 +723,20 @@ export function PostCard({ post }: { post: PostData }) {
                 <img src={qp.authorAvatar} alt="" className="quoted-post-avatar" />
               )}
               <span className="quoted-post-name">
-                {qp.authorDisplayName || qp.authorHandle}
+                {qp.authorDisplayName || qpHandleDisplay}
               </span>
-              <span className="quoted-post-handle">@{qp.authorHandle}</span>
+              <span className="quoted-post-handle">@{qpHandleDisplay}</span>
             </div>
-            {qp.text && (
+            {qp.contentHtml ? (
+              <div
+                className="quoted-post-content"
+                dangerouslySetInnerHTML={{ __html: qp.contentHtml }}
+              />
+            ) : qp.text ? (
               <div className="quoted-post-content">
                 <div dangerouslySetInnerHTML={{ __html: linkifyText(qp.text) }} />
               </div>
-            )}
+            ) : null}
             {qp.media && qp.media.length > 0 && (() => {
               const qpMedia = qp.media;
               const imageItems = qpMedia
