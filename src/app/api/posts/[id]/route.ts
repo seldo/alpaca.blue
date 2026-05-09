@@ -96,6 +96,8 @@ export async function GET(
       likeCount: row.post.likeCount,
       repostCount: row.post.repostCount,
       replyCount: row.post.replyCount,
+      viewerLiked: !!row.post.viewerLiked,
+      viewerReposted: !!row.post.viewerReposted,
       postedAt: row.post.postedAt.toISOString(),
       author: row.identity
         ? {

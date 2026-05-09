@@ -78,9 +78,20 @@ export async function POST(
     const status = await response.json();
     // For reblog, Mastodon returns the reblog wrapper; for unreblog, it returns the original
     const original = status.reblog || status;
+    const newReblogged = original.reblogged ?? !undo;
+
+    // Persist so the icon stays in the right state across renders.
+    await db
+      .update(posts)
+      .set({
+        viewerReposted: !!newReblogged,
+        repostCount: original.reblogs_count ?? post.repostCount,
+      })
+      .where(and(eq(posts.id, postId), eq(posts.userId, userId)))
+      .catch(() => {});
 
     return NextResponse.json({
-      reblogged: original.reblogged ?? !undo,
+      reblogged: newReblogged,
       repostCount: original.reblogs_count,
     });
   } catch (err) {

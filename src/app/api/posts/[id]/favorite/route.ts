@@ -78,6 +78,17 @@ export async function POST(
 
     const status = await response.json();
 
+    // Persist so the heart stays lit (or unlit) across renders before the
+    // next heartbeat refreshes the row.
+    await db
+      .update(posts)
+      .set({
+        viewerLiked: !!status.favourited,
+        likeCount: status.favourites_count ?? post.likeCount,
+      })
+      .where(and(eq(posts.id, postId), eq(posts.userId, userId)))
+      .catch(() => {});
+
     return NextResponse.json({
       favorited: status.favourited,
       likeCount: status.favourites_count,

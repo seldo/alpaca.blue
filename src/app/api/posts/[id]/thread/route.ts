@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { posts, connectedAccounts } from "@/db/schema";
 import { eq, and, inArray } from "drizzle-orm";
 import { requireSession, unauthorizedResponse } from "@/lib/session";
+import { getServerBlueskyAgent } from "@/lib/bluesky-server";
 
 // ── Types ─────────────────────────────────────────────────────
 
@@ -22,6 +23,8 @@ interface ThreadPost {
   likeCount: number | null;
   repostCount: number | null;
   replyCount: number | null;
+  viewerLiked: boolean;
+  viewerReposted: boolean;
   postedAt: string;
   author: {
     id: number;
@@ -55,6 +58,7 @@ interface BskyPost {
   likeCount?: number;
   repostCount?: number;
   replyCount?: number;
+  viewer?: { like?: string; repost?: string };
 }
 
 interface BskyThreadNode {
@@ -81,6 +85,8 @@ interface MastodonContextStatus {
   favourites_count: number;
   reblogs_count: number;
   replies_count: number;
+  favourited?: boolean;
+  reblogged?: boolean;
 }
 
 // ── HTML helpers ────────────────────────────────────────────────
@@ -207,6 +213,8 @@ function mapBskyPost(post: BskyPost, dbId: number): ThreadPost {
     likeCount: post.likeCount ?? null,
     repostCount: post.repostCount ?? null,
     replyCount: post.replyCount ?? null,
+    viewerLiked: !!post.viewer?.like,
+    viewerReposted: !!post.viewer?.repost,
     postedAt: post.indexedAt || post.record?.createdAt || new Date().toISOString(),
     author: {
       id: 0,
@@ -246,6 +254,8 @@ function mapMastodonStatus(status: MastodonContextStatus, instanceHost: string, 
     likeCount: status.favourites_count,
     repostCount: status.reblogs_count,
     replyCount: status.replies_count,
+    viewerLiked: !!status.favourited,
+    viewerReposted: !!status.reblogged,
     postedAt: status.created_at,
     author: {
       id: 0,
@@ -274,13 +284,20 @@ async function lookupDbIds(userId: number, platformPostIds: string[]): Promise<M
 // ── Platform handlers ─────────────────────────────────────────
 
 async function fetchBlueskyThread(userId: number, uri: string) {
-  const res = await fetch(
-    `https://public.api.bsky.app/xrpc/app.bsky.feed.getPostThread?uri=${encodeURIComponent(uri)}&depth=6&parentHeight=20`,
-    { headers: { Accept: "application/json" } }
-  );
-  if (!res.ok) return NextResponse.json({ ancestors: [], replies: [] });
+  // Use the authenticated agent so each post's viewer.like / viewer.repost
+  // is populated. The public API never sets these.
+  const agent = await getServerBlueskyAgent(userId);
+  if (!agent) return NextResponse.json({ ancestors: [], replies: [] });
 
-  const data = await res.json();
+  let data: { thread?: BskyThreadNode } | null = null;
+  try {
+    const res = await agent.getPostThread({ uri, depth: 6, parentHeight: 20 });
+    data = res.data as unknown as { thread?: BskyThreadNode };
+  } catch (err) {
+    console.error("[bluesky thread] failed:", err);
+    return NextResponse.json({ ancestors: [], replies: [] });
+  }
+  if (!data?.thread) return NextResponse.json({ ancestors: [], replies: [] });
   const thread: BskyThreadNode = data.thread;
   if (thread.$type !== "app.bsky.feed.defs#threadViewPost") {
     return NextResponse.json({ ancestors: [], replies: [] });

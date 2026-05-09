@@ -104,6 +104,11 @@ export const posts = mysqlTable(
     likeCount: int("like_count").default(0),
     repostCount: int("repost_count").default(0),
     replyCount: int("reply_count").default(0),
+    // Set when the logged-in user has already liked / reposted this post —
+    // either through alpaca.blue or another client. Sourced from the
+    // platform's viewer-relative fields (viewer.like / favourited).
+    viewerLiked: boolean("viewer_liked").default(false),
+    viewerReposted: boolean("viewer_reposted").default(false),
     postedAt: timestamp("posted_at").notNull(),
     fetchedAt: timestamp("fetched_at").defaultNow().notNull(),
     dedupeHash: varchar("dedupe_hash", { length: 64 }),

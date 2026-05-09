@@ -142,6 +142,8 @@ interface PostData {
   likeCount: number | null;
   repostCount: number | null;
   replyCount: number | null;
+  viewerLiked?: boolean;
+  viewerReposted?: boolean;
   postedAt: string;
   author: {
     id: number;
@@ -258,11 +260,11 @@ export function PostCard({ post }: { post: PostData }) {
     images: Array<{ url: string; alt: string }>;
     index: number;
   } | null>(null);
-  const [favorited, setFavorited] = useState(false);
+  const [favorited, setFavorited] = useState(!!post.viewerLiked);
   const [localLikeCount, setLocalLikeCount] = useState(post.likeCount || 0);
   const [favoriting, setFavoriting] = useState(false);
   const [localReplyCount] = useState(post.replyCount || 0);
-  const [reposted, setReposted] = useState(false);
+  const [reposted, setReposted] = useState(!!post.viewerReposted);
   const [localRepostCount, setLocalRepostCount] = useState(post.repostCount || 0);
   const [reposting, setReposting] = useState(false);
   const [repostMenuOpen, setRepostMenuOpen] = useState(false);

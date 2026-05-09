@@ -55,6 +55,10 @@ export interface BlueskyPostData {
   likeCount?: number;
   repostCount?: number;
   replyCount?: number;
+  // Viewer-relative state — true when the logged-in user has already liked
+  // or reposted this post (in alpaca.blue or any other client).
+  viewerLiked?: boolean;
+  viewerReposted?: boolean;
   replyToUri?: string;
   threadRootUri?: string;
   threadRootCid?: string;
@@ -74,6 +78,10 @@ interface MastodonStatus {
   favourites_count: number;
   reblogs_count: number;
   replies_count: number;
+  // Viewer-relative state. Populated when the request is authenticated;
+  // blank/undefined for unauthenticated fetches.
+  favourited?: boolean;
+  reblogged?: boolean;
   in_reply_to_id: string | null;
   reblog: MastodonStatus | null;
   // Mastodon 4.4+ native quote post. quoted_status is populated only when
@@ -263,6 +271,8 @@ export async function storeBlueskyPosts(
       likeCount: post.likeCount || 0,
       repostCount: post.repostCount || 0,
       replyCount: post.replyCount || 0,
+      viewerLiked: !!post.viewerLiked,
+      viewerReposted: !!post.viewerReposted,
       postedAt: new Date(post.createdAt),
       dedupeHash: computeDedupeHash(post.text || ""),
     });
@@ -287,6 +297,8 @@ export async function storeBlueskyPosts(
         likeCount: sql`values(${posts.likeCount})`,
         repostCount: sql`values(${posts.repostCount})`,
         replyCount: sql`values(${posts.replyCount})`,
+        viewerLiked: sql`values(${posts.viewerLiked})`,
+        viewerReposted: sql`values(${posts.viewerReposted})`,
         fetchedAt: new Date(),
       },
     });
@@ -391,6 +403,8 @@ export async function fetchAndStoreMastodonPosts(
       likeCount: actual.favourites_count || 0,
       repostCount: actual.reblogs_count || 0,
       replyCount: actual.replies_count || 0,
+      viewerLiked: !!actual.favourited,
+      viewerReposted: !!actual.reblogged,
       postedAt: new Date(actual.created_at),
       dedupeHash: computeDedupeHash(plainContent),
     });
@@ -408,6 +422,8 @@ export async function fetchAndStoreMastodonPosts(
         likeCount: sql`values(${posts.likeCount})`,
         repostCount: sql`values(${posts.repostCount})`,
         replyCount: sql`values(${posts.replyCount})`,
+        viewerLiked: sql`values(${posts.viewerLiked})`,
+        viewerReposted: sql`values(${posts.viewerReposted})`,
         fetchedAt: new Date(),
       },
     });
@@ -549,6 +565,8 @@ export async function fetchAndStoreMastodonMentions(
       likeCount: status.favourites_count || 0,
       repostCount: status.reblogs_count || 0,
       replyCount: status.replies_count || 0,
+      viewerLiked: !!status.favourited,
+      viewerReposted: !!status.reblogged,
       postedAt: new Date(status.created_at),
       dedupeHash: computeDedupeHash(plainContent),
     });
@@ -567,6 +585,8 @@ export async function fetchAndStoreMastodonMentions(
         likeCount: sql`values(${posts.likeCount})`,
         repostCount: sql`values(${posts.repostCount})`,
         replyCount: sql`values(${posts.replyCount})`,
+        viewerLiked: sql`values(${posts.viewerLiked})`,
+        viewerReposted: sql`values(${posts.viewerReposted})`,
         fetchedAt: new Date(),
       },
     });
@@ -648,6 +668,8 @@ export async function fetchAndStoreOwnMastodonPosts(
       likeCount: actual.favourites_count || 0,
       repostCount: actual.reblogs_count || 0,
       replyCount: actual.replies_count || 0,
+      viewerLiked: !!actual.favourited,
+      viewerReposted: !!actual.reblogged,
       postedAt: new Date(actual.created_at),
       dedupeHash: computeDedupeHash(plainContent),
     };
@@ -663,6 +685,8 @@ export async function fetchAndStoreOwnMastodonPosts(
         likeCount: sql`values(${posts.likeCount})`,
         repostCount: sql`values(${posts.repostCount})`,
         replyCount: sql`values(${posts.replyCount})`,
+        viewerLiked: sql`values(${posts.viewerLiked})`,
+        viewerReposted: sql`values(${posts.viewerReposted})`,
         fetchedAt: new Date(),
       },
     });
@@ -981,6 +1005,8 @@ export async function queryPostsByIdentities(
       likeCount: post.likeCount,
       repostCount: post.repostCount,
       replyCount: post.replyCount,
+      viewerLiked: !!post.viewerLiked,
+      viewerReposted: !!post.viewerReposted,
       postedAt: post.postedAt.toISOString(),
       author: identity
         ? { id: identity.id, handle: identity.handle, displayName: identity.displayName, avatarUrl: identity.avatarUrl, platform: identity.platform, profileUrl: identity.profileUrl }
@@ -1058,6 +1084,8 @@ export interface ProfilePost {
   likeCount: number | null;
   repostCount: number | null;
   replyCount: number | null;
+  viewerLiked: boolean;
+  viewerReposted: boolean;
   postedAt: string;
   author: { id: number; handle: string; displayName: string | null; avatarUrl: string | null; platform: string; profileUrl: string | null } | null;
   person: null;
@@ -1085,6 +1113,8 @@ export interface TimelinePost {
   likeCount: number | null;
   repostCount: number | null;
   replyCount: number | null;
+  viewerLiked: boolean;
+  viewerReposted: boolean;
   postedAt: string;
   author: { id: number; handle: string; displayName: string | null; avatarUrl: string | null; platform: string; profileUrl: string | null } | null;
   person: { id: number; displayName: string | null } | null;
@@ -1172,6 +1202,8 @@ export async function queryTimeline(
       likeCount: row.post.likeCount,
       repostCount: row.post.repostCount,
       replyCount: row.post.replyCount,
+      viewerLiked: !!row.post.viewerLiked,
+      viewerReposted: !!row.post.viewerReposted,
       postedAt: row.post.postedAt.toISOString(),
       author: row.identity
         ? { id: row.identity.id, handle: row.identity.handle, displayName: row.identity.displayName, avatarUrl: row.identity.avatarUrl, platform: row.identity.platform, profileUrl: row.identity.profileUrl }
@@ -1376,6 +1408,7 @@ function mapBlueskyFeedItem(item: { post: Record<string, unknown>; reason?: unkn
     repostCount?: number;
     replyCount?: number;
     embed?: unknown;
+    viewer?: { like?: string; repost?: string };
   };
   const text = post.record?.text || "";
   return {
@@ -1391,6 +1424,10 @@ function mapBlueskyFeedItem(item: { post: Record<string, unknown>; reason?: unkn
     likeCount: post.likeCount,
     repostCount: post.repostCount,
     replyCount: post.replyCount,
+    // Bluesky exposes viewer.like / viewer.repost as the AT URI of the
+    // user's like/repost record (or undefined if absent).
+    viewerLiked: !!post.viewer?.like,
+    viewerReposted: !!post.viewer?.repost,
     replyToUri: post.record?.reply?.parent?.uri || undefined,
     threadRootUri: post.record?.reply?.root?.uri || undefined,
     threadRootCid: post.record?.reply?.root?.cid || undefined,
@@ -1718,6 +1755,8 @@ export async function fetchAndStoreMastodonAuthorPosts(
       likeCount: status.favourites_count || 0,
       repostCount: status.reblogs_count || 0,
       replyCount: status.replies_count || 0,
+      viewerLiked: !!status.favourited,
+      viewerReposted: !!status.reblogged,
       postedAt: new Date(status.created_at),
       dedupeHash: computeDedupeHash(plainContent),
     });
@@ -1734,6 +1773,8 @@ export async function fetchAndStoreMastodonAuthorPosts(
         likeCount: sql`values(${posts.likeCount})`,
         repostCount: sql`values(${posts.repostCount})`,
         replyCount: sql`values(${posts.replyCount})`,
+        viewerLiked: sql`values(${posts.viewerLiked})`,
+        viewerReposted: sql`values(${posts.viewerReposted})`,
         fetchedAt: new Date(),
       },
     });
