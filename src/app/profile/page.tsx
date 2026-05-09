@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useRouter } from "next/navigation";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
 import { usePullToRefresh } from "@/lib/usePullToRefresh";
@@ -48,6 +49,7 @@ interface PostData {
 }
 
 export default function ProfilePage() {
+  const router = useRouter();
   const [user, setUser] = useState<UserInfo | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [posts, setPosts] = useState<PostData[]>([]);
@@ -120,6 +122,14 @@ export default function ProfilePage() {
 
   return (
     <AppLayout>
+      <button className="back-btn" onClick={() => router.back()}>
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+          <path d="M19 12H5" />
+          <polyline points="12 19 5 12 12 5" />
+        </svg>
+        Back
+      </button>
+
       {(pullDistance > 0 || pullRefreshing) && (
         <div className="pull-indicator" style={{ height: pullRefreshing ? 48 : pullDistance * 0.5 }}>
           <div className="spinner" style={{ opacity: pullRefreshing ? 1 : pullDistance > 0 ? 0.4 + 0.6 * (pullDistance / 72) : 0 }} />
