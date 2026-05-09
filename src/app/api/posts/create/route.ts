@@ -39,6 +39,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Mastodon convention: replies must be prefixed with @handle of the
+    // account being replied to, otherwise the recipient isn't notified and
+    // the post doesn't render as part of the thread for other viewers.
+    let statusText = content;
+    if (inReplyToId) {
+      const prefix = await mastodonReplyPrefix(
+        account.instanceUrl,
+        account.accessToken,
+        account.handle,
+        inReplyToId,
+        content
+      );
+      if (prefix) statusText = `${prefix} ${content}`.trim();
+    }
+
     const response = await fetch(`${account.instanceUrl}/api/v1/statuses`, {
       method: "POST",
       headers: {
@@ -46,7 +61,7 @@ export async function POST(request: NextRequest) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        status: content,
+        status: statusText,
         ...(mediaIds.length > 0 ? { media_ids: mediaIds } : {}),
         ...(inReplyToId ? { in_reply_to_id: inReplyToId } : {}),
       }),
@@ -58,10 +73,52 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Failed to post to Mastodon" }, { status: 502 });
     }
 
-    const status = await response.json();
-    return NextResponse.json({ id: status.id, url: status.url });
+    const created = await response.json();
+    return NextResponse.json({ id: created.id, url: created.url });
   } catch (err) {
     console.error("Create post error:", err);
     return NextResponse.json({ error: "Failed to create post" }, { status: 500 });
   }
+}
+
+// Looks up the in_reply_to status to find the author's acct. Returns the
+// `@acct` mention to prepend, or null if it should be skipped (self-reply,
+// already mentioned, or fetch failed).
+async function mastodonReplyPrefix(
+  instanceUrl: string,
+  accessToken: string,
+  ownHandle: string,
+  inReplyToId: string,
+  content: string
+): Promise<string | null> {
+  try {
+    const res = await fetch(
+      `${instanceUrl}/api/v1/statuses/${encodeURIComponent(inReplyToId)}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } }
+    );
+    if (!res.ok) return null;
+    const status = (await res.json()) as { account?: { acct?: string } };
+    const acct = status.account?.acct;
+    if (!acct) return null;
+
+    // Normalize to user@host for comparison. Local accounts return bare
+    // `username`; remote accounts return `username@host`.
+    const ownInstance = new URL(instanceUrl).hostname;
+    const fullAcct = acct.includes("@") ? acct : `${acct}@${ownInstance}`;
+    const ownNormalized = ownHandle.replace(/^@/, "");
+    if (fullAcct.toLowerCase() === ownNormalized.toLowerCase()) return null;
+
+    const mention = `@${acct}`;
+    if (new RegExp(`^@${escapeRegex(acct)}\\b`, "i").test(content.trim())) {
+      return null;
+    }
+    return mention;
+  } catch (err) {
+    console.error("[mastodonReplyPrefix] lookup failed:", err);
+    return null;
+  }
+}
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
