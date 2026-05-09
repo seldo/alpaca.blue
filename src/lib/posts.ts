@@ -5,6 +5,7 @@ import {
   connectedAccounts,
   persons,
   users,
+  crossPostMirrors,
 } from "@/db/schema";
 import { eq, and, lt, desc, isNull, inArray, sql } from "drizzle-orm";
 import { createHash } from "crypto";
@@ -768,6 +769,57 @@ export async function getOwnIdentityIds(userId: number): Promise<number[]> {
   return rows.map((r) => r.id);
 }
 
+// ── Cross-post mirror folding ──────────────────────────────
+
+// Loads the user's recorded URL-only mirrors. Keyed by `${platform}:${platformPostId}`
+// so the merge can detect a mirror row by its identity on its own platform and
+// fold it into the original post's alsoPostedOn.
+async function loadCrossPostMirrors(
+  userId: number
+): Promise<Map<string, number>> {
+  const rows = await db
+    .select({
+      originalPostId: crossPostMirrors.originalPostId,
+      mirrorPlatform: crossPostMirrors.mirrorPlatform,
+      mirrorPlatformPostId: crossPostMirrors.mirrorPlatformPostId,
+    })
+    .from(crossPostMirrors)
+    .where(eq(crossPostMirrors.userId, userId));
+  const map = new Map<string, number>();
+  for (const r of rows) {
+    map.set(`${r.mirrorPlatform}:${r.mirrorPlatformPostId}`, r.originalPostId);
+  }
+  return map;
+}
+
+interface MirrorAlso {
+  platform: string;
+  postUrl: string | null;
+  platformPostId: string;
+  platformPostCid: string | null;
+  threadRootId: string | null;
+  threadRootCid: string | null;
+}
+
+// Attaches pending mirror entries to their originals when both end up in the
+// same result page. Mirrors whose original isn't on this page are silently
+// dropped — they would otherwise show up as bare URL posts the user already
+// saw via the original.
+function attachPendingMirrors<T extends { id: number; alsoPostedOn: MirrorAlso[] }>(
+  result: T[],
+  pendingMirrors: Map<number, MirrorAlso[]>
+): void {
+  for (const entry of result) {
+    const mirrors = pendingMirrors.get(entry.id);
+    if (!mirrors) continue;
+    for (const m of mirrors) {
+      if (!entry.alsoPostedOn.some((p) => p.platform === m.platform && p.platformPostId === m.platformPostId)) {
+        entry.alsoPostedOn.push(m);
+      }
+    }
+  }
+}
+
 // ── Query posts by identity IDs ────────────────────────────
 
 export async function queryPostsByIdentities(
@@ -828,10 +880,28 @@ export async function queryPostsByIdentities(
     }
   }
 
+  const mirrorOf = await loadCrossPostMirrors(userId);
+  const pendingMirrors = new Map<number, MirrorAlso[]>();
+
   const seen = new Map<string, number>();
   const result: ProfilePost[] = [];
 
   for (const post of rows) {
+    const mirrorOriginalId = mirrorOf.get(`${post.platform}:${post.platformPostId}`);
+    if (mirrorOriginalId && mirrorOriginalId !== post.id) {
+      const existing = pendingMirrors.get(mirrorOriginalId) ?? [];
+      existing.push({
+        platform: post.platform,
+        postUrl: post.postUrl ?? null,
+        platformPostId: post.platformPostId,
+        platformPostCid: post.platformPostCid ?? null,
+        threadRootId: post.threadRootId ?? null,
+        threadRootCid: post.threadRootCid ?? null,
+      });
+      pendingMirrors.set(mirrorOriginalId, existing);
+      continue;
+    }
+
     const hash = post.dedupeHash;
 
     const identity = identityMap.get(post.platformIdentityId);
@@ -903,6 +973,8 @@ export async function queryPostsByIdentities(
 
     if (result.length === limit) break;
   }
+
+  attachPendingMirrors(result, pendingMirrors);
 
   const nextCursor = result.length === limit ? result[result.length - 1].postedAt : null;
   return { posts: result, nextCursor };
@@ -998,10 +1070,28 @@ export async function queryTimeline(
     .orderBy(desc(posts.postedAt))
     .limit(fetchLimit);
 
+  const mirrorOf = await loadCrossPostMirrors(userId);
+  const pendingMirrors = new Map<number, MirrorAlso[]>();
+
   const seen = new Map<string, number>();
   const result: TimelinePost[] = [];
 
   for (const row of rows) {
+    const mirrorOriginalId = mirrorOf.get(`${row.post.platform}:${row.post.platformPostId}`);
+    if (mirrorOriginalId && mirrorOriginalId !== row.post.id) {
+      const existing = pendingMirrors.get(mirrorOriginalId) ?? [];
+      existing.push({
+        platform: row.post.platform,
+        postUrl: row.post.postUrl ?? null,
+        platformPostId: row.post.platformPostId,
+        platformPostCid: row.post.platformPostCid ?? null,
+        threadRootId: row.post.threadRootId ?? null,
+        threadRootCid: row.post.threadRootCid ?? null,
+      });
+      pendingMirrors.set(mirrorOriginalId, existing);
+      continue;
+    }
+
     const hash = row.post.dedupeHash;
 
     const entry: TimelinePost = {
@@ -1072,6 +1162,7 @@ export async function queryTimeline(
   }
 
   const trimmed = result.slice(0, limit);
+  attachPendingMirrors(trimmed, pendingMirrors);
   const nextCursor = trimmed.length === limit ? trimmed[trimmed.length - 1].postedAt : null;
   const response = { posts: trimmed, nextCursor };
 

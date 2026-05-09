@@ -390,8 +390,10 @@ export function PostCard({ post }: { post: PostData }) {
 
       // Cross-platform fanout — only on initial repost, not undo. If the
       // post has a mirror on the other platform, native-repost the mirror;
-      // otherwise post the original platform's URL as a status. Reached
-      // only when the primary repost above succeeded.
+      // otherwise post the original's URL as a status via cross-post-mirror,
+      // which also records the link so the bare URL post gets folded back
+      // into the original on the timeline. Reached only when the primary
+      // repost above succeeded.
       if (!isUndo && post.postUrl) {
         const otherPlatform = post.platform === "bluesky" ? "mastodon" : "bluesky";
         const mirror = post.alsoPostedOn?.find((p) => p.platform === otherPlatform);
@@ -404,10 +406,10 @@ export function PostCard({ post }: { post: PostData }) {
               body: JSON.stringify({ uri: mirror.platformPostId, cid: mirror.platformPostCid }),
             }).catch(() => {});
           } else {
-            await fetch("/api/bluesky/post", {
+            await fetch("/api/posts/cross-post-mirror", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ text: post.postUrl }),
+              body: JSON.stringify({ originalPostId: post.id, targetPlatform: "bluesky" }),
             }).catch(() => {});
           }
         } else {
@@ -419,10 +421,10 @@ export function PostCard({ post }: { post: PostData }) {
               body: JSON.stringify({ statusId: mirror.platformPostId }),
             }).catch(() => {});
           } else {
-            await fetch("/api/posts/create", {
+            await fetch("/api/posts/cross-post-mirror", {
               method: "POST",
               headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ content: post.postUrl }),
+              body: JSON.stringify({ originalPostId: post.id, targetPlatform: "mastodon" }),
             }).catch(() => {});
           }
         }

@@ -160,6 +160,33 @@ export const matchSuggestions = mysqlTable(
   ]
 );
 
+// Records URL-only mirror posts created when the user reposts cross-platform.
+// Lets the timeline merge fold the bare-URL mirror into the original instead
+// of showing both as separate posts.
+export const crossPostMirrors = mysqlTable(
+  "cross_post_mirrors",
+  {
+    id: int("id").primaryKey().autoincrement(),
+    userId: int("user_id")
+      .references(() => users.id, { onDelete: "cascade" })
+      .notNull(),
+    originalPostId: int("original_post_id")
+      .references(() => posts.id, { onDelete: "cascade" })
+      .notNull(),
+    mirrorPlatform: varchar("mirror_platform", { length: 50 }).notNull(),
+    mirrorPlatformPostId: varchar("mirror_platform_post_id", { length: 512 }).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => [
+    uniqueIndex("mirror_user_platform_post_idx").on(
+      table.userId,
+      table.mirrorPlatform,
+      table.mirrorPlatformPostId
+    ),
+    index("mirror_original_idx").on(table.originalPostId),
+  ]
+);
+
 // Connected accounts — the user's own platform credentials
 export const connectedAccounts = mysqlTable(
   "connected_accounts",
