@@ -18,6 +18,7 @@ interface ThreadPost {
   replyToId: string | null;
   repostOfId: string | null;
   quotedPost: null;
+  linkCard: { url: string; title: string; description?: string; thumb?: string } | null;
   likeCount: number | null;
   repostCount: number | null;
   replyCount: number | null;
@@ -155,6 +156,29 @@ function extractBskyImages(embed: unknown): Array<{ type: string; url: string; a
   return null;
 }
 
+// app.bsky.embed.external#view carries link cards (and Bluesky-rendered GIFs,
+// which are just Tenor link cards with .gif URLs that the renderer
+// auto-detects). Mirror the storage path's extractor so thread posts get
+// their cards too.
+function extractBskyExternalCard(embed: unknown): ThreadPost["linkCard"] {
+  if (!embed || typeof embed !== "object") return null;
+  const e = embed as Record<string, unknown>;
+  const direct = e.external as { uri?: string; title?: string; description?: string; thumb?: string } | undefined;
+  if (e.$type === "app.bsky.embed.external#view" && direct?.uri) {
+    return {
+      url: direct.uri,
+      title: direct.title || direct.uri,
+      description: direct.description || undefined,
+      thumb: direct.thumb || undefined,
+    };
+  }
+  // recordWithMedia wraps the external card under `media`.
+  if (e.$type === "app.bsky.embed.recordWithMedia#view" && e.media) {
+    return extractBskyExternalCard(e.media);
+  }
+  return null;
+}
+
 // ── Mappers ───────────────────────────────────────────────────
 
 function mapBskyPost(post: BskyPost, dbId: number): ThreadPost {
@@ -163,6 +187,10 @@ function mapBskyPost(post: BskyPost, dbId: number): ThreadPost {
   const profileUrl = `https://bsky.app/profile/${post.author.handle}`;
   const postUrl = rkey ? `https://bsky.app/profile/${post.author.handle}/post/${rkey}` : null;
   const images = extractBskyImages(post.embed);
+  // Only attach the external card when there's no inline media — Bluesky
+  // posts are constrained to one embed at a time, but recordWithMedia can
+  // surface both branches. Prefer images for layout simplicity.
+  const linkCard = images ? null : extractBskyExternalCard(post.embed);
   return {
     id: dbId,
     platform: "bluesky",
@@ -175,6 +203,7 @@ function mapBskyPost(post: BskyPost, dbId: number): ThreadPost {
     replyToId: post.record?.reply?.parent?.uri || null,
     repostOfId: null,
     quotedPost: null,
+    linkCard,
     likeCount: post.likeCount ?? null,
     repostCount: post.repostCount ?? null,
     replyCount: post.replyCount ?? null,
@@ -213,6 +242,7 @@ function mapMastodonStatus(status: MastodonContextStatus, instanceHost: string, 
     replyToId: status.in_reply_to_id || null,
     repostOfId: null,
     quotedPost: null,
+    linkCard: null,
     likeCount: status.favourites_count,
     repostCount: status.reblogs_count,
     replyCount: status.replies_count,

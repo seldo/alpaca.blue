@@ -89,6 +89,10 @@ export async function GET(
         typeof row.post.quotedPost === "string"
           ? JSON.parse(row.post.quotedPost)
           : row.post.quotedPost,
+      linkCard:
+        typeof row.post.linkCard === "string"
+          ? JSON.parse(row.post.linkCard)
+          : (row.post.linkCard ?? null),
       likeCount: row.post.likeCount,
       repostCount: row.post.repostCount,
       replyCount: row.post.replyCount,
