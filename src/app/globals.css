@@ -2097,6 +2097,38 @@ a.post-timestamp:hover {
   font-size: 1rem;
 }
 
+/* Desktop compose: bigger surface than the inline reply input it shares
+   styles with. Placed after .post-reply-input below so the overrides win. */
+@media (min-width: 640px) {
+  .create-post-modal-backdrop {
+    padding-top: 64px;
+  }
+
+  .create-post-modal {
+    max-width: 640px;
+    padding: 28px;
+  }
+
+  .create-post-modal-title {
+    font-size: 1.25rem;
+    margin-bottom: 10px;
+  }
+
+  /* Higher specificity beats .post-reply-input's matching font-size /
+     min-height / padding so the desktop compose textarea feels roomier. */
+  .create-post-modal .create-post-input {
+    font-size: 1.2rem;
+    line-height: 1.45;
+    padding: 14px 16px;
+    min-height: 200px;
+  }
+
+  /* Breathing room above the action bar. */
+  .create-post-modal .post-reply-actions {
+    margin-top: 18px;
+  }
+}
+
 /* Parent post preview shown when composing a reply */
 .create-post-reply-target {
   display: flex;
