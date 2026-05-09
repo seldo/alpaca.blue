@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { connectedAccounts } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { requireSession, unauthorizedResponse } from "@/lib/session";
+import { expandBareDomains } from "@/lib/expand-bare-domains";
 
 export async function POST(request: NextRequest) {
   try {
@@ -39,19 +40,23 @@ export async function POST(request: NextRequest) {
       );
     }
 
+    // Promote bare hostnames to https:// URLs — Mastodon's server-side
+    // linkifier only matches schema-prefixed URLs.
+    const expandedContent = expandBareDomains(content);
+
     // Mastodon convention: replies must be prefixed with @handle of the
     // account being replied to, otherwise the recipient isn't notified and
     // the post doesn't render as part of the thread for other viewers.
-    let statusText = content;
+    let statusText = expandedContent;
     if (inReplyToId) {
       const prefix = await mastodonReplyPrefix(
         account.instanceUrl,
         account.accessToken,
         account.handle,
         inReplyToId,
-        content
+        expandedContent,
       );
-      if (prefix) statusText = `${prefix} ${content}`.trim();
+      if (prefix) statusText = `${prefix} ${expandedContent}`.trim();
     }
 
     const response = await fetch(`${account.instanceUrl}/api/v1/statuses`, {

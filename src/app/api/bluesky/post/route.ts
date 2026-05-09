@@ -3,6 +3,7 @@ import { RichText } from "@atproto/api";
 import { getServerBlueskyAgent } from "@/lib/bluesky-server";
 import { buildBlueskyLinkCard } from "@/lib/link-preview";
 import { requireSession, unauthorizedResponse } from "@/lib/session";
+import { expandBareDomains } from "@/lib/expand-bare-domains";
 
 interface BlobRef {
   $type: string;
@@ -33,7 +34,9 @@ export async function POST(request: NextRequest) {
   const agent = await getServerBlueskyAgent(session.userId!);
   if (!agent) return NextResponse.json({ error: "Bluesky session not found" }, { status: 401 });
 
-  const rt = new RichText({ text: text.trim() });
+  // Promote bare hostnames to https:// URLs so detectFacets can pick them up
+  // as link facets (it only matches schema-prefixed URLs reliably).
+  const rt = new RichText({ text: expandBareDomains(text.trim()) });
   await rt.detectFacets(agent);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
