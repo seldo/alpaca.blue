@@ -2554,13 +2554,29 @@ a.post-timestamp:hover {
 
 /* ── Profile page ─────────────────────────────────────── */
 
+.profile-header-container {
+  margin: 0 -24px 8px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.profile-banner {
+  height: 160px;
+  background-size: cover;
+  background-position: center;
+  background-color: var(--color-surface);
+}
+
+.profile-banner-empty {
+  background-image: linear-gradient(120deg, #e3f2fd 0%, #bbdefb 100%);
+  height: 80px;
+}
+
 .profile-header {
   display: flex;
-  align-items: center;
+  align-items: flex-end;
   gap: 16px;
-  padding: 24px 0 20px;
-  border-bottom: 1px solid var(--color-border);
-  margin-bottom: 8px;
+  padding: 0 24px 16px;
+  margin-top: -36px;
 }
 
 .profile-avatar {
@@ -2569,6 +2585,261 @@ a.post-timestamp:hover {
   border-radius: 50%;
   object-fit: cover;
   flex-shrink: 0;
+  border: 3px solid var(--color-bg);
+  background: var(--color-bg);
+}
+
+.profile-bio {
+  padding: 12px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.profile-bio:last-of-type {
+  border-bottom: none;
+  margin-bottom: 8px;
+}
+
+.profile-bio-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+}
+
+.profile-bio-handle {
+  font-weight: 500;
+}
+
+.profile-bio-content {
+  font-size: 0.95rem;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.profile-bio-content-text {
+  white-space: pre-wrap;
+}
+
+.profile-bio-content a {
+  color: var(--color-brand);
+}
+
+/* ── Person card (used on /persons/[id]) ──────────────── */
+
+.person-identity-banner {
+  height: 80px;
+  background-size: cover;
+  background-position: center;
+  background-color: var(--color-surface);
+  margin: -12px -12px 8px;
+  border-radius: 8px 8px 0 0;
+}
+
+.person-identity-bio {
+  padding: 8px 0 0;
+  font-size: 0.95rem;
+  line-height: 1.45;
+  margin: 0;
+}
+
+.person-identity-bio-text {
+  white-space: pre-wrap;
+}
+
+.person-identity-bio a {
+  color: var(--color-brand);
+}
+
+.person-identity-card {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 12px;
+  margin-bottom: 12px;
+  background: var(--color-bg);
+}
+
+/* ── Profile hero (used on /identities/[id]) ──────────── */
+
+.profile-hero {
+  margin: 0 -24px 0;
+  border-bottom: 1px solid var(--color-border);
+}
+
+/* Sized to the banner only — absolutes inside don't expand it, so
+   `top: 100%` for avatar/follow lands at the banner's bottom edge. */
+.profile-hero-banner-wrap {
+  position: relative;
+}
+
+.profile-hero-banner {
+  height: 200px;
+  background-size: cover;
+  background-position: center;
+  background-color: var(--color-surface);
+}
+
+.profile-hero-banner-empty {
+  background-image: linear-gradient(120deg, #e3f2fd 0%, #bbdefb 100%);
+  height: 120px;
+}
+
+.profile-hero-actions {
+  position: absolute;
+  top: 100%;
+  right: 16px;
+  margin-top: 12px;
+  z-index: 1;
+}
+
+.profile-follow-btn {
+  border-radius: 999px;
+  padding: 6px 18px;
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+
+.profile-hero-avatar {
+  position: absolute;
+  left: 16px;
+  top: 100%;
+  transform: translateY(-50%);
+  width: 96px;
+  height: 96px;
+  border-radius: 50%;
+  border: 4px solid var(--color-bg);
+  background: var(--color-bg);
+  overflow: hidden;
+}
+
+.profile-hero-avatar-img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+.profile-hero-body {
+  padding: 60px 16px 16px;
+}
+
+.profile-hero-displayname {
+  margin: 0;
+  font-size: 1.4rem;
+  font-weight: 700;
+}
+
+.profile-hero-handle {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  font-size: 0.95rem;
+  color: var(--color-text-muted);
+}
+
+.profile-hero-handle-link {
+  color: inherit;
+  text-decoration: none;
+}
+
+.profile-hero-handle-link:hover {
+  text-decoration: underline;
+}
+
+.profile-hero-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 12px;
+  font-size: 0.95rem;
+}
+
+.profile-hero-stat strong {
+  font-weight: 700;
+}
+
+.profile-hero-bio {
+  margin-top: 12px;
+  font-size: 0.95rem;
+  line-height: 1.45;
+}
+
+.profile-hero-bio a {
+  color: var(--color-brand);
+  word-break: break-word;
+}
+
+.profile-hero-bio p {
+  margin: 0 0 0.5em;
+}
+
+.profile-hero-bio p:last-child {
+  margin-bottom: 0;
+}
+
+.profile-hero-merged-link {
+  display: inline-block;
+  margin-top: 12px;
+  font-size: 0.85rem;
+  color: var(--color-brand);
+}
+
+/* Tabs */
+.profile-tabs {
+  display: flex;
+  margin: 0 -24px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-bg);
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.profile-tab {
+  flex: 1;
+  background: none;
+  border: none;
+  padding: 12px 8px;
+  font-family: inherit;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  border-bottom: 2px solid transparent;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.profile-tab:hover {
+  color: var(--color-text);
+}
+
+.profile-tab-active {
+  color: var(--color-text);
+  border-bottom-color: var(--color-brand);
+  font-weight: 600;
+}
+
+@media (max-width: 639px) {
+  .profile-hero-banner {
+    height: 140px;
+  }
+  .profile-hero-banner-empty {
+    height: 96px;
+  }
+  .profile-hero-avatar {
+    width: 80px;
+    height: 80px;
+  }
+  .profile-hero-body {
+    padding-top: 50px;
+  }
+  /* On mobile the topbar is fixed at the top, so the sticky tabs need to
+     sit just below it instead of at the viewport edge. */
+  .profile-tabs {
+    top: calc(52px + env(safe-area-inset-top));
+  }
 }
 
 .profile-info {
@@ -2626,16 +2897,9 @@ a.post-timestamp:hover {
   color: #dc3545;
 }
 
-/* Person identities list (person view page) */
+/* Person identities list (person view page) — cards stand alone now,
+   so the wrapper has no border of its own. */
 .person-identities-list {
-  border-radius: 12px;
-  border: 1px solid var(--color-border);
-  background: var(--color-surface);
-  padding: 12px 16px;
-}
-
-.person-identities-list .person-identity-row + .person-identity-row {
-  margin-top: 8px;
-  padding-top: 8px;
-  border-top: 1px solid var(--color-border);
+  display: flex;
+  flex-direction: column;
 }

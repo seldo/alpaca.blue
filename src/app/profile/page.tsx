@@ -14,6 +14,11 @@ interface UserInfo {
 interface Account {
   platform: string;
   handle: string;
+  displayName: string | null;
+  avatarUrl: string | null;
+  bio: string | null;
+  bannerUrl: string | null;
+  profileUrl: string | null;
 }
 
 interface PostData {
@@ -52,6 +57,16 @@ export default function ProfilePage() {
   const [fetching, setFetching] = useState(false);
   const isFetchingRef = useRef(false);
 
+  const fetchAccounts = useCallback(async () => {
+    try {
+      const res = await fetch("/api/accounts");
+      const data = res.ok ? await res.json() : [];
+      setAccounts(Array.isArray(data) ? data : []);
+    } catch {
+      // ignore — keep whatever we already have
+    }
+  }, []);
+
   const refreshPosts = useCallback(async () => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
@@ -68,6 +83,9 @@ export default function ProfilePage() {
         setPosts(data.posts);
         setNextCursor(data.nextCursor);
       }
+      // /api/profile/posts refreshes the user's own bio + banner data
+      // server-side. Refetch /api/accounts so the header reflects it.
+      await fetchAccounts();
     } catch (err) {
       console.error("Profile refresh error:", err);
     } finally {
@@ -75,19 +93,13 @@ export default function ProfilePage() {
       setLoading(false);
       isFetchingRef.current = false;
     }
-  }, []);
+  }, [fetchAccounts]);
 
   useEffect(() => {
-    Promise.all([
-      fetch("/api/auth/me").then((r) => (r.ok ? r.json() : null)),
-      fetch("/api/accounts").then((r) => (r.ok ? r.json() : [])),
-    ]).then(([me, accts]) => {
-      setUser(me);
-      setAccounts(Array.isArray(accts) ? accts : []);
-    }).catch(() => {});
-
+    fetch("/api/auth/me").then((r) => (r.ok ? r.json() : null)).then(setUser).catch(() => {});
+    fetchAccounts();
     refreshPosts();
-  }, [refreshPosts]);
+  }, [refreshPosts, fetchAccounts]);
 
   const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refreshPosts, fetching);
 
@@ -113,24 +125,10 @@ export default function ProfilePage() {
           <div className="spinner" style={{ opacity: pullRefreshing ? 1 : pullDistance > 0 ? 0.4 + 0.6 * (pullDistance / 72) : 0 }} />
         </div>
       )}
-      <div className="profile-header">
-        {user?.avatarUrl && (
-          <img src={user.avatarUrl} alt="" className="profile-avatar" />
-        )}
-        <div className="profile-info">
-          <h1 className="profile-displayname">{user?.displayName || user?.blueskyHandle}</h1>
-          <div className="profile-accounts">
-            {accounts.map((a) => (
-              <span key={`${a.platform}-${a.handle}`} className="profile-account-chip">
-                <span className={`platform-badge ${a.platform}`}>
-                  {a.platform === "bluesky" ? "B" : "M"}
-                </span>
-                <span className="profile-account-handle">{a.handle}</span>
-              </span>
-            ))}
-          </div>
-        </div>
-      </div>
+      <ProfileHeader user={user} accounts={accounts} />
+      {accounts.map((a) => a.bio ? (
+        <ProfileBioBlock key={`${a.platform}-${a.handle}`} account={a} />
+      ) : null)}
 
       {(loading || fetching) && (
         <div className="spinner-container"><div className="spinner" /></div>
@@ -157,5 +155,68 @@ export default function ProfilePage() {
         </div>
       )}
     </AppLayout>
+  );
+}
+
+// Picks the Bluesky banner if present (it's the login platform); falls back
+// to Mastodon's. The banner is purely decorative — alt text is intentional
+// and empty so screen readers skip it.
+function ProfileHeader({ user, accounts }: { user: UserInfo | null; accounts: Account[] }) {
+  const banner =
+    accounts.find((a) => a.platform === "bluesky")?.bannerUrl ??
+    accounts.find((a) => a.platform === "mastodon")?.bannerUrl ??
+    null;
+
+  return (
+    <div className="profile-header-container">
+      {banner ? (
+        <div className="profile-banner" style={{ backgroundImage: `url(${banner})` }} />
+      ) : (
+        <div className="profile-banner profile-banner-empty" />
+      )}
+      <div className="profile-header">
+        {user?.avatarUrl && (
+          <img src={user.avatarUrl} alt="" className="profile-avatar" />
+        )}
+        <div className="profile-info">
+          <h1 className="profile-displayname">{user?.displayName || user?.blueskyHandle}</h1>
+          <div className="profile-accounts">
+            {accounts.map((a) => (
+              <span key={`${a.platform}-${a.handle}`} className="profile-account-chip">
+                <span className={`platform-badge ${a.platform}`}>
+                  {a.platform === "bluesky" ? "B" : "M"}
+                </span>
+                <span className="profile-account-handle">{a.handle}</span>
+              </span>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Mastodon bios arrive as HTML (links, mentions); Bluesky bios are plain text
+// with newlines. Render each accordingly so links keep working on Mastodon
+// and line breaks are preserved on Bluesky.
+function ProfileBioBlock({ account }: { account: Account }) {
+  if (!account.bio) return null;
+  return (
+    <section className="profile-bio">
+      <div className="profile-bio-header">
+        <span className={`platform-badge ${account.platform}`}>
+          {account.platform === "bluesky" ? "B" : "M"}
+        </span>
+        <span className="profile-bio-handle">{account.handle}</span>
+      </div>
+      {account.platform === "mastodon" ? (
+        <div
+          className="profile-bio-content"
+          dangerouslySetInnerHTML={{ __html: account.bio }}
+        />
+      ) : (
+        <p className="profile-bio-content profile-bio-content-text">{account.bio}</p>
+      )}
+    </section>
   );
 }

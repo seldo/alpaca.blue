@@ -7,6 +7,12 @@ import { AppLayout } from "@/components/AppHeader";
 import { Avatar } from "@/components/Avatar";
 import { usePullToRefresh } from "@/lib/usePullToRefresh";
 
+interface IdentityStats {
+  followersCount: number | null;
+  followingCount: number | null;
+  postsCount: number | null;
+}
+
 interface Identity {
   id: number;
   platform: string;
@@ -15,6 +21,11 @@ interface Identity {
   avatarUrl: string | null;
   profileUrl: string | null;
   personId: number | null;
+  bio: string | null;
+  bioHtml: string | null;
+  bannerUrl: string | null;
+  stats: IdentityStats;
+  isFollowing: boolean;
 }
 
 interface PostData {
@@ -53,6 +64,14 @@ interface PostData {
   alsoPostedOn: Array<{ platform: string; postUrl: string | null; platformPostId: string; platformPostCid: string | null; threadRootId: string | null; threadRootCid: string | null }>;
 }
 
+type Tab = "posts" | "replies" | "media" | "videos";
+const TABS: { key: Tab; label: string }[] = [
+  { key: "posts", label: "Posts" },
+  { key: "replies", label: "Replies" },
+  { key: "media", label: "Media" },
+  { key: "videos", label: "Videos" },
+];
+
 export default function IdentityPage() {
   const params = useParams();
   const router = useRouter();
@@ -61,24 +80,24 @@ export default function IdentityPage() {
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [posts, setPosts] = useState<PostData[]>([]);
   const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [tab, setTab] = useState<Tab>("posts");
   const [loading, setLoading] = useState(true);
   const [fetching, setFetching] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [followBusy, setFollowBusy] = useState(false);
   const isFetchingRef = useRef(false);
   const pendingScrollRestore = useRef<number | null>(null);
 
-  const cacheKey = `identity_cache_${identityId}`;
-  const scrollKey = `identity_scroll_${identityId}`;
+  const cacheKey = `identity_cache_${identityId}_${tab}`;
+  const scrollKey = `identity_scroll_${identityId}_${tab}`;
 
-  const fetchData = useCallback(async () => {
+  const fetchData = useCallback(async (selectedTab: Tab) => {
     if (isFetchingRef.current) return;
     isFetchingRef.current = true;
-    sessionStorage.removeItem(cacheKey);
-    sessionStorage.removeItem(scrollKey);
     setFetching(true);
 
     try {
-      const res = await fetch(`/api/identities/${identityId}/posts?limit=50`);
+      const res = await fetch(`/api/identities/${identityId}/posts?limit=50&tab=${selectedTab}`);
       if (!res.ok) throw new Error("Failed to fetch");
       const data = await res.json();
       setIdentity(data.identity);
@@ -91,16 +110,18 @@ export default function IdentityPage() {
       setLoading(false);
       isFetchingRef.current = false;
     }
-  }, [identityId, cacheKey, scrollKey]);
+  }, [identityId]);
 
-  // Cache state
+  // Persist state in sessionStorage so back-nav restores instantly. We only
+  // save when posts is non-empty: switching tabs clears `posts` to [] and
+  // would otherwise trample the destination tab's cached data before the
+  // load effect can read it.
   useEffect(() => {
-    if (identity || posts.length > 0) {
+    if (identity && posts.length > 0) {
       sessionStorage.setItem(cacheKey, JSON.stringify({ identity, posts, nextCursor }));
     }
   }, [identity, posts, nextCursor, cacheKey]);
 
-  // Save scroll position
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout>;
     function handleScroll() {
@@ -116,15 +137,17 @@ export default function IdentityPage() {
     };
   }, [scrollKey]);
 
-  // Restore from cache or fetch fresh
+  // On mount or tab change: hydrate from cache if we have one, otherwise fetch.
+  // Requires non-empty posts — an old cache with `identity` but no posts (from
+  // a prior buggy save) would otherwise short-circuit and never refetch.
   useEffect(() => {
     const cached = sessionStorage.getItem(cacheKey);
     if (cached) {
       try {
         const { identity: i, posts: p, nextCursor: c } = JSON.parse(cached);
-        if (i || p?.length > 0) {
+        if (i && Array.isArray(p) && p.length > 0) {
           setIdentity(i);
-          setPosts(p || []);
+          setPosts(p);
           setNextCursor(c);
           setLoading(false);
           const savedScroll = sessionStorage.getItem(scrollKey);
@@ -135,8 +158,9 @@ export default function IdentityPage() {
         // fall through
       }
     }
-    fetchData();
-  }, [fetchData, cacheKey, scrollKey]);
+    setLoading(true);
+    fetchData(tab);
+  }, [fetchData, cacheKey, scrollKey, tab]);
 
   useLayoutEffect(() => {
     if (pendingScrollRestore.current !== null && posts.length > 0) {
@@ -145,13 +169,19 @@ export default function IdentityPage() {
     }
   }, [posts]);
 
-  const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(fetchData, fetching);
+  const refresh = useCallback(() => {
+    sessionStorage.removeItem(cacheKey);
+    sessionStorage.removeItem(scrollKey);
+    return fetchData(tab);
+  }, [fetchData, tab, cacheKey, scrollKey]);
+
+  const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refresh, fetching);
 
   async function loadMore() {
     if (!nextCursor || loadingMore) return;
     setLoadingMore(true);
     try {
-      const res = await fetch(`/api/identities/${identityId}/posts?limit=50&cursor=${nextCursor}`);
+      const res = await fetch(`/api/identities/${identityId}/posts?limit=50&tab=${tab}&cursor=${nextCursor}`);
       const data = await res.json();
       setPosts((prev) => [...prev, ...data.posts]);
       setNextCursor(data.nextCursor);
@@ -159,6 +189,37 @@ export default function IdentityPage() {
       console.error("Load more error:", err);
     } finally {
       setLoadingMore(false);
+    }
+  }
+
+  function selectTab(next: Tab) {
+    if (next === tab) return;
+    setTab(next);
+    setPosts([]);
+    setNextCursor(null);
+  }
+
+  async function toggleFollow() {
+    if (!identity || followBusy) return;
+    setFollowBusy(true);
+    const wasFollowing = identity.isFollowing;
+    // Optimistic UI
+    setIdentity({ ...identity, isFollowing: !wasFollowing });
+    try {
+      const res = await fetch(`/api/identities/${identityId}/follow`, {
+        method: wasFollowing ? "DELETE" : "POST",
+      });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error(data.error || "Follow failed");
+      }
+    } catch (err) {
+      // Roll back on failure
+      setIdentity({ ...identity, isFollowing: wasFollowing });
+      const message = err instanceof Error ? err.message : "Follow failed";
+      alert(message);
+    } finally {
+      setFollowBusy(false);
     }
   }
 
@@ -188,35 +249,80 @@ export default function IdentityPage() {
 
       {!loading && identity && (
         <>
-          <section className="section">
-            <div className="person-identity-row" style={{ gap: "12px", padding: "8px 0" }}>
-              {identity.avatarUrl && (
-                <Avatar identityId={identity.id} src={identity.avatarUrl} className="person-identity-avatar" style={{ width: 48, height: 48 }} />
+          <div className="profile-hero">
+            <div className="profile-hero-banner-wrap">
+              {identity.bannerUrl ? (
+                <div className="profile-hero-banner" style={{ backgroundImage: `url(${identity.bannerUrl})` }} />
+              ) : (
+                <div className="profile-hero-banner profile-hero-banner-empty" />
               )}
-              <div>
-                <div style={{ fontWeight: 600, fontSize: "1.1rem" }}>{displayName}</div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, marginTop: 2 }}>
-                  <span className={`platform-badge ${identity.platform}`}>
-                    {identity.platform === "bluesky" ? "B" : "M"}
-                  </span>
-                  <span className="text-muted" style={{ fontSize: "0.9rem" }}>{identity.handle}</span>
-                </div>
+              <div className="profile-hero-actions">
+                <button
+                  className={`btn ${identity.isFollowing ? "btn-outline" : "btn-primary"} profile-follow-btn`}
+                  onClick={toggleFollow}
+                  disabled={followBusy}
+                >
+                  {identity.isFollowing ? "Following" : "Follow"}
+                </button>
               </div>
+              <div className="profile-hero-avatar">
+                {identity.avatarUrl && (
+                  <Avatar identityId={identity.id} src={identity.avatarUrl} className="profile-hero-avatar-img" />
+                )}
+              </div>
+            </div>
+            <div className="profile-hero-body">
+              <h1 className="profile-hero-displayname">{displayName}</h1>
+              <div className="profile-hero-handle">
+                <span className={`platform-badge ${identity.platform}`}>
+                  {identity.platform === "bluesky" ? "B" : "M"}
+                </span>
+                {identity.profileUrl ? (
+                  <a href={identity.profileUrl} target="_blank" rel="noopener noreferrer" className="profile-hero-handle-link">
+                    @{identity.handle}
+                  </a>
+                ) : (
+                  <span>@{identity.handle}</span>
+                )}
+              </div>
+
+              <ProfileStats stats={identity.stats} />
+
+              {identity.bioHtml && (
+                <div className="profile-hero-bio" dangerouslySetInnerHTML={{ __html: identity.bioHtml }} />
+              )}
+
               {identity.personId && (
-                <a href={`/persons/${identity.personId}`} className="btn btn-outline" style={{ marginLeft: "auto", fontSize: "0.85rem" }}>
-                  View merged profile
+                <a href={`/persons/${identity.personId}`} className="profile-hero-merged-link">
+                  View merged profile →
                 </a>
               )}
             </div>
-          </section>
+          </div>
+
+          <nav className="profile-tabs" role="tablist" aria-label="Posts filter">
+            {TABS.map((t) => (
+              <button
+                key={t.key}
+                role="tab"
+                aria-selected={tab === t.key}
+                className={`profile-tab${tab === t.key ? " profile-tab-active" : ""}`}
+                onClick={() => selectTab(t.key)}
+              >
+                {t.label}
+              </button>
+            ))}
+          </nav>
 
           <section className="section">
-            <h2 className="section-title">
-              Posts {posts.length > 0 && `(${posts.length})`}
-            </h2>
+            {fetching && posts.length === 0 && (
+              <div className="spinner-container"><div className="spinner" /></div>
+            )}
 
-            {posts.length === 0 && (
-              <p className="text-muted">No posts fetched yet.</p>
+            {!fetching && posts.length === 0 && (
+              <p className="text-muted" style={{ textAlign: "center", padding: "32px 0" }}>
+                Nothing to show.
+              </p>
             )}
 
             <div className="timeline-feed">
@@ -241,4 +347,28 @@ export default function IdentityPage() {
       )}
     </AppLayout>
   );
+}
+
+function ProfileStats({ stats }: { stats: IdentityStats }) {
+  const items: Array<{ value: number | null; label: string }> = [
+    { value: stats.followersCount, label: "followers" },
+    { value: stats.followingCount, label: "following" },
+    { value: stats.postsCount, label: "posts" },
+  ];
+  if (items.every((i) => i.value === null)) return null;
+  return (
+    <div className="profile-hero-stats">
+      {items.map((i) => i.value === null ? null : (
+        <span key={i.label} className="profile-hero-stat">
+          <strong>{formatStat(i.value)}</strong> <span className="text-muted">{i.label}</span>
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function formatStat(n: number): string {
+  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`.replace(".0K", "K");
+  return n.toString();
 }

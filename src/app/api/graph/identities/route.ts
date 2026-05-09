@@ -3,6 +3,7 @@ import { db } from "@/db";
 import { persons, platformIdentities } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { requireSession, unauthorizedResponse } from "@/lib/session";
+import { extractBannerUrl } from "@/lib/profile-meta";
 
 export async function GET() {
   try {
@@ -20,13 +21,30 @@ export async function GET() {
       .from(platformIdentities)
       .where(eq(platformIdentities.userId, userId));
 
+    // Strip rawProfile (can be large) but extract bannerUrl from it so the
+    // client doesn't need to know each platform's JSON shape.
+    const enriched = allIdentities.map((i) => ({
+      id: i.id,
+      personId: i.personId,
+      platform: i.platform,
+      handle: i.handle,
+      did: i.did,
+      displayName: i.displayName,
+      avatarUrl: i.avatarUrl,
+      bio: i.bio,
+      profileUrl: i.profileUrl,
+      verifiedDomain: i.verifiedDomain,
+      isFollowed: i.isFollowed,
+      bannerUrl: extractBannerUrl(i.platform, i.rawProfile),
+    }));
+
     const personsWithIdentities = allPersons.map((person) => ({
       ...person,
-      identities: allIdentities.filter((i) => i.personId === person.id),
+      identities: enriched.filter((i) => i.personId === person.id),
     }));
 
     // Unlinked identities (no person assigned)
-    const unlinked = allIdentities.filter((i) => i.personId === null);
+    const unlinked = enriched.filter((i) => i.personId === null);
 
     return NextResponse.json({
       persons: personsWithIdentities,

@@ -13,6 +13,8 @@ interface Identity {
   handle: string;
   displayName: string | null;
   avatarUrl: string | null;
+  bio: string | null;
+  bannerUrl: string | null;
 }
 
 interface PostData {
@@ -206,18 +208,30 @@ export default function PersonPage() {
               <h2 className="section-title">Accounts</h2>
               <div className="person-identities-list">
                 {identities.map((i) => (
-                  <div key={i.id} className="person-identity-row">
-                    {i.avatarUrl && (
-                      <Avatar
-                        identityId={i.id}
-                        src={i.avatarUrl}
-                        className="person-identity-avatar"
-                      />
+                  <div key={i.id} className="person-identity-card">
+                    {i.bannerUrl && (
+                      <div className="person-identity-banner" style={{ backgroundImage: `url(${i.bannerUrl})` }} />
                     )}
-                    <span className={`platform-badge ${i.platform}`}>
-                      {i.platform === "bluesky" ? "B" : "M"}
-                    </span>
-                    <span className="person-identity-handle">{i.handle}</span>
+                    <div className="person-identity-row">
+                      {i.avatarUrl && (
+                        <Avatar
+                          identityId={i.id}
+                          src={i.avatarUrl}
+                          className="person-identity-avatar"
+                        />
+                      )}
+                      <span className={`platform-badge ${i.platform}`}>
+                        {i.platform === "bluesky" ? "B" : "M"}
+                      </span>
+                      <span className="person-identity-handle">{i.handle}</span>
+                    </div>
+                    {i.bio && (
+                      i.platform === "mastodon" ? (
+                        <div className="person-identity-bio" dangerouslySetInnerHTML={{ __html: i.bio }} />
+                      ) : (
+                        <p className="person-identity-bio person-identity-bio-text">{i.bio}</p>
+                      )
+                    )}
                   </div>
                 ))}
               </div>
