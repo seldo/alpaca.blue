@@ -568,22 +568,28 @@ export function PostCard({ post }: { post: PostData }) {
         <div className="post-reply-to">Replied to you</div>
       )}
 
-      {post.replyToAuthor && (
-        <div className="post-reply-to">
-          In reply to{" "}
-          {post.replyToAuthor.dbPostId > 0 ? (
-            <a href={`/posts/${post.replyToAuthor.dbPostId}`} className="post-reply-to-link">
-              @{post.replyToAuthor.handle}
-            </a>
-          ) : post.replyToAuthor.postUrl ? (
-            <a href={post.replyToAuthor.postUrl} target="_blank" rel="noopener noreferrer" className="post-reply-to-link">
-              @{post.replyToAuthor.handle}
-            </a>
-          ) : (
-            <span>@{post.replyToAuthor.handle}</span>
-          )}
-        </div>
-      )}
+      {post.replyToAuthor && (() => {
+        // Mastodon handles are stored with a leading @ ("@user@instance");
+        // Bluesky handles aren't. Strip so the rendered "@" prefix doesn't
+        // double up on Mastodon parents.
+        const replyToHandle = post.replyToAuthor.handle.replace(/^@/, "");
+        return (
+          <div className="post-reply-to">
+            In reply to{" "}
+            {post.replyToAuthor.dbPostId > 0 ? (
+              <a href={`/posts/${post.replyToAuthor.dbPostId}`} className="post-reply-to-link">
+                @{replyToHandle}
+              </a>
+            ) : post.replyToAuthor.postUrl ? (
+              <a href={post.replyToAuthor.postUrl} target="_blank" rel="noopener noreferrer" className="post-reply-to-link">
+                @{replyToHandle}
+              </a>
+            ) : (
+              <span>@{replyToHandle}</span>
+            )}
+          </div>
+        );
+      })()}
 
       {post.alsoPostedOn && post.alsoPostedOn.length > 0 && (
         <div className="post-crosspost">

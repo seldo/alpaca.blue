@@ -277,13 +277,18 @@ export default function IdentityPage() {
                 <span className={`platform-badge ${identity.platform}`}>
                   {identity.platform === "bluesky" ? "B" : "M"}
                 </span>
-                {identity.profileUrl ? (
-                  <a href={identity.profileUrl} target="_blank" rel="noopener noreferrer" className="profile-hero-handle-link">
-                    @{identity.handle}
-                  </a>
-                ) : (
-                  <span>@{identity.handle}</span>
-                )}
+                {(() => {
+                  // Mastodon handles are stored with a leading @; strip so
+                  // the rendered "@" doesn't double up.
+                  const handle = identity.handle.replace(/^@/, "");
+                  return identity.profileUrl ? (
+                    <a href={identity.profileUrl} target="_blank" rel="noopener noreferrer" className="profile-hero-handle-link">
+                      @{handle}
+                    </a>
+                  ) : (
+                    <span>@{handle}</span>
+                  );
+                })()}
               </div>
 
               <ProfileStats stats={identity.stats} />
