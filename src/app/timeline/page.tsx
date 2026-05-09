@@ -147,6 +147,15 @@ export default function TimelinePage() {
     return () => window.removeEventListener("posts:created", handler);
   }, [forceRefresh]);
 
+  // Bottom-nav tap-on-active-tab: AppHeader dispatches feed:refresh after
+  // scrolling to the top, and we run the heartbeat-busting forceRefresh
+  // so the user sees something genuinely new.
+  useEffect(() => {
+    function handler() { forceRefresh(); }
+    window.addEventListener("feed:refresh", handler);
+    return () => window.removeEventListener("feed:refresh", handler);
+  }, [forceRefresh]);
+
   const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refreshFeed, fetching);
 
   useEffect(() => {

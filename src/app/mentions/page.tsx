@@ -144,6 +144,14 @@ export default function MentionsPage() {
     return () => clearInterval(id);
   }, [heartbeat]);
 
+  // Bottom-nav tap-on-active-tab: AppHeader dispatches feed:refresh after
+  // scrolling to the top, we re-fetch the feed.
+  useEffect(() => {
+    function handler() { refreshFeed(); }
+    window.addEventListener("feed:refresh", handler);
+    return () => window.removeEventListener("feed:refresh", handler);
+  }, [refreshFeed]);
+
   const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refreshFeed, fetching);
 
   useEffect(() => {

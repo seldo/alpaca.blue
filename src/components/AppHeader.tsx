@@ -33,6 +33,20 @@ function getScreenTitle(pathname: string): string {
   return "alpaca.blue";
 }
 
+// Tapping a bottombar tab while already on its route shouldn't be a no-op.
+// Mirror the Twitter/Bluesky pattern: scroll to top and trigger a refresh.
+// The active page listens for `feed:refresh` and runs its own reload.
+function sameRouteTapToRefresh(
+  e: React.MouseEvent<HTMLAnchorElement>,
+  href: string,
+  pathname: string,
+) {
+  if (pathname !== href) return; // let Link navigate normally
+  e.preventDefault();
+  window.scrollTo({ top: 0, behavior: "smooth" });
+  window.dispatchEvent(new CustomEvent("feed:refresh"));
+}
+
 export function AppLayout({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<UserInfo | null>(cachedUser);
   const [composeOpen, setComposeOpen] = useState(false);
@@ -304,7 +318,13 @@ export function AppLayout({ children }: { children: ReactNode }) {
       )}
 
       <nav className="app-bottombar">
-        <Link href="/timeline" prefetch className={`app-bottombar-item${pathname === "/timeline" || pathname.startsWith("/posts/") ? " app-bottombar-active" : ""}`} aria-label="Timeline">
+        <Link
+          href="/timeline"
+          prefetch
+          className={`app-bottombar-item${pathname === "/timeline" || pathname.startsWith("/posts/") ? " app-bottombar-active" : ""}`}
+          aria-label="Timeline"
+          onClick={(e) => sameRouteTapToRefresh(e, "/timeline", pathname)}
+        >
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <line x1="17" y1="10" x2="3" y2="10" />
             <line x1="21" y1="6" x2="3" y2="6" />
@@ -312,7 +332,13 @@ export function AppLayout({ children }: { children: ReactNode }) {
             <line x1="17" y1="18" x2="3" y2="18" />
           </svg>
         </Link>
-        <Link href="/mentions" prefetch className={`app-bottombar-item${pathname === "/mentions" ? " app-bottombar-active" : ""}`} aria-label="Mentions">
+        <Link
+          href="/mentions"
+          prefetch
+          className={`app-bottombar-item${pathname === "/mentions" ? " app-bottombar-active" : ""}`}
+          aria-label="Mentions"
+          onClick={(e) => sameRouteTapToRefresh(e, "/mentions", pathname)}
+        >
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
             <circle cx="12" cy="12" r="4" />
             <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94" />
