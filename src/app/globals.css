@@ -306,8 +306,11 @@ body {
 
 .app-sidebar-compose {
   width: calc(100% - 16px);
-  margin: 0 8px 8px;
+  margin: 12px 8px 0;
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
+  gap: 8px;
 }
 
 .app-content {

@@ -145,10 +145,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
             </Link>
           )}
 
-          <button className="btn btn-primary app-sidebar-compose" onClick={() => setComposeOpen(true)}>
-            New Post
-          </button>
-
           <nav className="app-sidebar-nav">
             <Link
               href="/timeline"
@@ -188,6 +184,18 @@ export function AppLayout({ children }: { children: ReactNode }) {
               <span className="app-sidebar-label">Identities</span>
             </Link>
           </nav>
+
+          <button
+            className="btn btn-primary app-sidebar-compose"
+            onClick={() => setComposeOpen(true)}
+            aria-label="New post"
+          >
+            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+            <span className="app-sidebar-label">New Post</span>
+          </button>
         </div>
 
         <div className="app-sidebar-bottom">
@@ -286,7 +294,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
               replyTo={composeReplyTo}
               quoteOf={composeQuoteOf}
               onClose={closeCompose}
-              onPosted={closeCompose}
+              onPosted={() => {
+                closeCompose();
+                window.dispatchEvent(new CustomEvent("posts:created"));
+              }}
             />
           </div>
         </div>

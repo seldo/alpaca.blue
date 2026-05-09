@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { usePullToRefresh } from "@/lib/usePullToRefresh";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
-import { CreatePost } from "@/components/CreatePost";
 
 interface PostData {
   id: number;
@@ -55,7 +54,6 @@ export default function TimelinePage() {
   const [fetching, setFetching] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [composeOpen, setComposeOpen] = useState(false);
   const pendingScrollRestore = useRef<number | null>(null);
   const isFetchingRef = useRef(false);
   const fetchControllerRef = useRef<AbortController | null>(null);
@@ -141,6 +139,14 @@ export default function TimelinePage() {
     return () => clearInterval(id);
   }, [heartbeat]);
 
+  // Refresh after a successful compose. AppLayout owns the modal, so we
+  // can't call onPosted directly — listen for the event it dispatches.
+  useEffect(() => {
+    function handler() { setTimeout(forceRefresh, 1000); }
+    window.addEventListener("posts:created", handler);
+    return () => window.removeEventListener("posts:created", handler);
+  }, [forceRefresh]);
+
   const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refreshFeed, fetching);
 
   useEffect(() => {
@@ -214,21 +220,12 @@ export default function TimelinePage() {
 
   return (
     <AppLayout>
-      {composeOpen ? (
-        <div className="create-post-modal-backdrop" onClick={() => setComposeOpen(false)}>
-          <div className="create-post-modal" onClick={(e) => e.stopPropagation()}>
-            <p className="create-post-modal-title">New Post</p>
-            <CreatePost
-              onClose={() => setComposeOpen(false)}
-              onPosted={() => { setComposeOpen(false); setTimeout(forceRefresh, 1000); }}
-            />
-          </div>
-        </div>
-      ) : (
-        <button className="create-post-trigger" onClick={() => setComposeOpen(true)}>
-          What&apos;s up?
-        </button>
-      )}
+      <button
+        className="create-post-trigger"
+        onClick={() => window.dispatchEvent(new CustomEvent("compose:open"))}
+      >
+        What&apos;s up?
+      </button>
 
       {(pullDistance > 0 || pullRefreshing) && (
         <div className="pull-indicator" style={{ height: pullRefreshing ? 48 : pullDistance * 0.5 }}>
