@@ -14,6 +14,12 @@ export async function POST(request: NextRequest) {
   const agent = await getServerBlueskyAgent(session.userId!);
   if (!agent) return NextResponse.json({ error: "Bluesky session not found" }, { status: 401 });
 
-  await agent.repost(uri, cid);
-  return NextResponse.json({ ok: true });
+  try {
+    await agent.repost(uri, cid);
+    return NextResponse.json({ ok: true });
+  } catch (err) {
+    console.error("[bluesky/repost] failed:", err);
+    const message = err instanceof Error ? err.message : "Failed to repost";
+    return NextResponse.json({ error: message }, { status: 502 });
+  }
 }

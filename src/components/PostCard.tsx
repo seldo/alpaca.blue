@@ -350,40 +350,48 @@ export function PostCard({ post }: { post: PostData }) {
     e.stopPropagation();
     setRepostMenuOpen(false);
     if (reposting) return;
-    setReposting(true);
 
     const isUndo = reposted;
 
     try {
       if (post.platform === "bluesky") {
         if (!post.platformPostCid) {
-          console.warn("Cannot repost: missing CID");
+          alert("Can't repost: this post is missing data needed to repost it.");
           return;
         }
         if (isUndo) return; // Can't undo Bluesky reposts without stored URI
-        await fetch("/api/bluesky/repost", {
+        setReposting(true);
+        const res = await fetch("/api/bluesky/repost", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ uri: post.platformPostId, cid: post.platformPostCid }),
         });
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || `Repost failed (${res.status})`);
+        }
         setReposted(true);
         setLocalRepostCount((c) => c + 1);
       } else if (post.platform === "mastodon") {
+        setReposting(true);
         const res = await fetch(`/api/posts/${post.id}/repost`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ undo: isUndo }),
         });
-        if (res.ok) {
-          const data = await res.json();
-          setReposted(data.reblogged);
-          setLocalRepostCount(data.repostCount);
+        if (!res.ok) {
+          const data = await res.json().catch(() => ({}));
+          throw new Error(data.error || `Repost failed (${res.status})`);
         }
+        const data = await res.json();
+        setReposted(data.reblogged);
+        setLocalRepostCount(data.repostCount);
       }
 
       // Cross-platform fanout — only on initial repost, not undo. If the
       // post has a mirror on the other platform, native-repost the mirror;
-      // otherwise post the original platform's URL as a status.
+      // otherwise post the original platform's URL as a status. Reached
+      // only when the primary repost above succeeded.
       if (!isUndo && post.postUrl) {
         const otherPlatform = post.platform === "bluesky" ? "mastodon" : "bluesky";
         const mirror = post.alsoPostedOn?.find((p) => p.platform === otherPlatform);
@@ -421,6 +429,8 @@ export function PostCard({ post }: { post: PostData }) {
       }
     } catch (err) {
       console.error("Repost error:", err);
+      const message = err instanceof Error ? err.message : "Repost failed";
+      alert(message);
     } finally {
       setReposting(false);
     }
