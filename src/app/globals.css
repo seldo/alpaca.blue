@@ -1293,20 +1293,18 @@ body {
   flex-direction: column;
 }
 
-/* "N new posts" pill — sticks just below the top so it stays reachable while
-   scrolled, and doesn't shift the feed (new posts are held back until tapped). */
+/* "N new posts" pill — sits above the feed and sticks just below the top so it
+   stays reachable while scrolled. */
 .new-posts-pill-wrap {
   position: sticky;
   top: 8px;
   z-index: 50;
   display: flex;
   justify-content: center;
-  pointer-events: none;
-  height: 0;
+  margin: 4px 0 8px;
 }
 
 .new-posts-pill {
-  pointer-events: auto;
   background: var(--color-primary);
   color: #fff;
   border: none;
