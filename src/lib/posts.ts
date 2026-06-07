@@ -174,6 +174,13 @@ function normalizeForDedup(content: string): string {
     // Bare domain URLs (e.g. "example.com/path..." from Bluesky truncation)
     .replace(/\b[\w-]+\.[\w-]+\.\w{2,}\/\S*/g, "")
     .replace(/\b[\w-]+\.\w{2,}\/\S*/g, "")
+    // Strip punctuation / symbols / emoji, keeping letters & numbers of any
+    // script. Cross-posts differ in punctuation because platforms linkify and
+    // format differently (Mastodon serves HTML that stripHtmlTags turns into
+    // " url , " with stray spaces/commas; Bluesky keeps plain text; bullet
+    // newlines become spaces on one side). Removing punctuation makes the two
+    // normalize to the same text so they dedupe.
+    .replace(/[^\p{L}\p{N}\s]/gu, " ")
     // Collapse whitespace
     .replace(/\s+/g, " ")
     .trim()
