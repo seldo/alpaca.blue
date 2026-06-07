@@ -88,29 +88,80 @@ export function AppLayout({ children }: { children: ReactNode }) {
     setComposeQuoteOf(undefined);
   }
 
-  // Track the visual viewport while the compose modal is open. On iOS (and
-  // Android with the default interactive-widget mode) the soft keyboard
-  // shrinks the visual viewport without shrinking the layout viewport, so
-  // `100vh`/`100dvh` and `position: fixed` sit behind the keyboard. We mirror
-  // visualViewport.height / offsetTop into CSS variables that the compose
-  // backdrop reads, so the modal stays pinned above the keyboard.
+  // Freeze the background page while the compose modal is open. On iOS, focusing
+  // the textarea makes Safari scroll the (long) timeline to reveal the input and
+  // shove the layout viewport around — that displacement is what was leaving a
+  // gap and drifting the sheet. Pinning the body removes anything for iOS to
+  // scroll, so visualViewport.offsetTop collapses to ~0 and the geometry below
+  // becomes reliable. We restore the scroll position on close.
+  useEffect(() => {
+    if (!composeOpen) return;
+    const body = document.body;
+    const scrollY = window.scrollY;
+    const prev = {
+      position: body.style.position,
+      top: body.style.top,
+      left: body.style.left,
+      right: body.style.right,
+      width: body.style.width,
+      overflow: body.style.overflow,
+    };
+    body.style.position = "fixed";
+    body.style.top = `-${scrollY}px`;
+    body.style.left = "0";
+    body.style.right = "0";
+    body.style.width = "100%";
+    body.style.overflow = "hidden";
+    return () => {
+      body.style.position = prev.position;
+      body.style.top = prev.top;
+      body.style.left = prev.left;
+      body.style.right = prev.right;
+      body.style.width = prev.width;
+      body.style.overflow = prev.overflow;
+      window.scrollTo(0, scrollY);
+    };
+  }, [composeOpen]);
+
+  // Pin the compose modal to the visual viewport while it's open. With the
+  // background frozen (above), the soft keyboard simply shrinks the visual
+  // viewport. We mirror its size/offset into CSS vars; the overlay is sized to
+  // the visual viewport and counter-translated by its offset so it covers
+  // exactly the visible area above the keyboard, with no undimmed strip below
+  // the sheet. Re-applied on every resize/scroll for safety.
   useEffect(() => {
     if (!composeOpen) return;
     const vv = window.visualViewport;
     if (!vv) return;
     const root = document.documentElement;
     function update() {
-      root.style.setProperty("--vvh", `${vv!.height}px`);
-      root.style.setProperty("--vv-offset", `${vv!.offsetTop}px`);
+      // Everything below the visual viewport — on iOS 26 that's not just the
+      // keys but the hostname bubble, the accessory bar, and the suggestion
+      // strip, all translucent. The backdrop + sheet must fill this so the
+      // page doesn't show through behind them.
+      const keyboardHeight = Math.max(
+        0,
+        window.innerHeight - vv!.height - vv!.offsetTop,
+      );
+      root.style.setProperty("--vv-width", `${vv!.width}px`);
+      root.style.setProperty("--vv-height", `${vv!.height}px`);
+      root.style.setProperty("--vv-left", `${vv!.offsetLeft}px`);
+      root.style.setProperty("--vv-top", `${vv!.offsetTop}px`);
+      root.style.setProperty("--keyboard-height", `${keyboardHeight}px`);
     }
     update();
     vv.addEventListener("resize", update);
     vv.addEventListener("scroll", update);
+    window.addEventListener("scroll", update, true);
     return () => {
       vv.removeEventListener("resize", update);
       vv.removeEventListener("scroll", update);
-      root.style.removeProperty("--vvh");
-      root.style.removeProperty("--vv-offset");
+      window.removeEventListener("scroll", update, true);
+      root.style.removeProperty("--vv-width");
+      root.style.removeProperty("--vv-height");
+      root.style.removeProperty("--vv-left");
+      root.style.removeProperty("--vv-top");
+      root.style.removeProperty("--keyboard-height");
     };
   }, [composeOpen]);
 

@@ -2057,13 +2057,18 @@ a.post-timestamp:hover {
 
 .create-post-modal-backdrop {
   position: fixed;
-  /* --vvh / --vv-offset come from AppHeader's visualViewport listener so the
-     backdrop tracks the visible area when the soft keyboard is open. They
-     fall back to the full layout viewport on browsers without the API. */
-  top: var(--vv-offset, 0);
+  top: 0;
   left: 0;
-  right: 0;
-  height: var(--vvh, 100dvh);
+  /* Covers the visible area *plus* everything the keyboard occupies below it.
+     The background page is scroll-locked while this is open, so a layout-sized
+     overlay no longer drifts. --vv-* come from AppHeader's visualViewport
+     listener; --keyboard-height is the slice below the visual viewport (keys +
+     iOS 26's translucent accessory/suggestion bars). Filling it means the dim
+     layer sits behind that furniture instead of the live page. The transform
+     soaks up any residual visual-viewport offset. */
+  width: var(--vv-width, 100vw);
+  height: calc(var(--vv-height, 100dvh) + var(--keyboard-height, 0px));
+  transform: translate(var(--vv-left, 0px), var(--vv-top, 0px));
   background: rgba(0, 0, 0, 0.4);
   display: flex;
   align-items: flex-start;
@@ -2085,6 +2090,13 @@ a.post-timestamp:hover {
   font-weight: 600;
   margin: 0 0 12px;
   font-size: 1rem;
+}
+
+/* The alt-text editor has its own "Alt text" header, so the modal's "New Post"
+   title is redundant there — hide it to reclaim vertical space when the
+   keyboard is up. */
+.create-post-modal-title:has(+ .alt-editor) {
+  display: none;
 }
 
 .create-post-input {
@@ -2200,12 +2212,16 @@ a.post-timestamp:hover {
 
   .create-post-modal {
     max-width: none;
-    /* Backdrop is sized to the visual viewport, so 80% follows the
-       keyboard-adjusted area: the action bar always sits just above the
-       keyboard, and a strip at the top stays tappable to dismiss. */
-    height: 80%;
+    /* Visible portion is ~80% of the area above the keyboard (a strip stays
+       tappable at the top to dismiss); the sheet then continues down behind the
+       keyboard furniture (+ --keyboard-height) so its background — not the live
+       page — shows through iOS 26's translucent accessory/suggestion bars. */
+    height: calc(var(--vv-height, 100dvh) * 0.8 + var(--keyboard-height, 0px));
     border-radius: 16px 16px 0 0;
-    padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
+    /* Hold the content above the keyboard furniture; the extra height below is
+       just background. When the keyboard is closed --keyboard-height is 0 and
+       the home-indicator safe area applies instead. */
+    padding: 16px 16px calc(16px + var(--keyboard-height, 0px) + env(safe-area-inset-bottom));
     box-shadow: 0 -4px 24px rgba(0, 0, 0, 0.18);
     display: flex;
     flex-direction: column;
@@ -2248,8 +2264,12 @@ a.post-timestamp:hover {
 .alt-editor {
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 12px;
   flex: 1;
+  /* Allow flex children to shrink below their content size so the textarea and
+     actions stay within the keyboard-safe content area instead of overflowing
+     below the keyboard. */
+  min-height: 0;
 }
 
 .alt-editor-header {
@@ -2257,6 +2277,7 @@ a.post-timestamp:hover {
   align-items: center;
   justify-content: space-between;
   gap: 8px;
+  flex-shrink: 0;
 }
 
 .alt-editor-title {
@@ -2268,23 +2289,29 @@ a.post-timestamp:hover {
 .alt-editor-image {
   display: flex;
   justify-content: center;
+  align-items: center;
   background: var(--color-surface);
   border-radius: 8px;
   padding: 8px;
-  max-height: 40vh;
+  /* Absorbs the leftover vertical space: grows when there's room, shrinks
+     (the image scales down via object-fit) when the keyboard takes the space,
+     so the textarea and actions below it always stay visible. */
+  flex: 1 1 0;
+  min-height: 60px;
   overflow: hidden;
 }
 
 .alt-editor-image img {
   max-width: 100%;
-  max-height: 40vh;
+  max-height: 100%;
   object-fit: contain;
   border-radius: 4px;
 }
 
 .alt-editor-textarea {
   width: 100%;
-  min-height: 140px;
+  flex-shrink: 0;
+  min-height: 96px;
   font-family: inherit;
   font-size: 1.05rem;
   line-height: 1.4;
@@ -2293,7 +2320,7 @@ a.post-timestamp:hover {
   border-radius: 8px;
   background: var(--color-bg);
   color: var(--color-text);
-  resize: vertical;
+  resize: none;
 }
 
 .alt-editor-textarea:focus {
@@ -2307,6 +2334,7 @@ a.post-timestamp:hover {
   justify-content: space-between;
   gap: 8px;
   flex-wrap: wrap;
+  flex-shrink: 0;
 }
 
 .alt-editor-charcount {
