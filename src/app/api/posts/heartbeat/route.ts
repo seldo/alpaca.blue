@@ -6,7 +6,6 @@ import {
   fetchAndStoreMastodonMentions,
   fetchBlueskyReactions,
   fetchMastodonReactions,
-  queryTimeline,
 } from "@/lib/posts";
 import { requireSession, unauthorizedResponse } from "@/lib/session";
 import { redis, keys } from "@/lib/redis";
@@ -33,14 +32,22 @@ export async function POST(request: NextRequest) {
       ]);
     }
 
-    const results = await Promise.allSettled([
-      fetchAndStoreBlueskyPosts(userId),
-      fetchAndStoreMastodonPosts(userId),
+    // The streaming worker keeps the home timeline warm in real time, so the
+    // periodic heartbeat no longer polls timeline posts — that's the bulk of the
+    // upstream Bluesky/Mastodon traffic eliminated. Mentions and reactions
+    // aren't streamed yet, so they keep polling. Timeline is still fetched on a
+    // `force` request (compose / tap-to-refresh) so the user's *own* posts —
+    // which the worker doesn't watch — get captured promptly.
+    const tasks = [
       fetchAndStoreBlueskyMentions(userId),
       fetchAndStoreMastodonMentions(userId),
       fetchBlueskyReactions(userId),
       fetchMastodonReactions(userId),
-    ]);
+    ];
+    if (force) {
+      tasks.push(fetchAndStoreBlueskyPosts(userId), fetchAndStoreMastodonPosts(userId));
+    }
+    const results = await Promise.allSettled(tasks);
     results.forEach((r, i) => {
       if (r.status === "rejected") {
         console.error(`[heartbeat] fetch[${i}] error:`, r.reason);
