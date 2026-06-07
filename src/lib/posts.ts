@@ -70,7 +70,7 @@ export interface BlueskyPostData {
   isMention?: boolean;
 }
 
-interface MastodonStatus {
+export interface MastodonStatus {
   id: string;
   url: string; // canonical URL on the author's instance
   content: string;
@@ -332,42 +332,20 @@ export async function storeBlueskyPosts(
   return { stored: rows.length };
 }
 
-// ── Fetch & store Mastodon posts ───────────────────────────
+// ── Store Mastodon home-timeline statuses ──────────────────
 
-export async function fetchAndStoreMastodonPosts(
-  userId: number
+// Maps a batch of Mastodon home-timeline statuses into post rows and upserts
+// them, busting the timeline cache. Split out of fetchAndStoreMastodonPosts so
+// both the polling path and the streaming worker (which receives the same
+// Status shape over the `user` WebSocket) store posts identically. instanceHost
+// is the viewer's instance, used to qualify bare handles and quote URLs.
+export async function storeMastodonStatuses(
+  userId: number,
+  statuses: MastodonStatus[],
+  instanceHost: string,
 ): Promise<{ stored: number }> {
-  const debounceKey = keys.mastodonFetched(userId, "timeline");
-  const recentlyFetched = await redis.get(debounceKey).catch(() => null);
-  if (recentlyFetched) {
-    console.log(`[mastodon] timeline fetch skipped (debounced)`);
-    return { stored: 0 };
-  }
+  if (statuses.length === 0) return { stored: 0 };
 
-  const [account] = await db
-    .select()
-    .from(connectedAccounts)
-    .where(and(eq(connectedAccounts.userId, userId), eq(connectedAccounts.platform, "mastodon")))
-    .limit(1);
-
-  if (!account?.accessToken || !account.instanceUrl) {
-    throw new Error("Not authenticated with Mastodon");
-  }
-
-  const instanceUrl = account.instanceUrl;
-  const instanceHost = new URL(instanceUrl).hostname;
-
-  const t0 = Date.now();
-  const response = await fetch(`${instanceUrl}/api/v1/timelines/home?limit=40`, {
-    headers: { Authorization: `Bearer ${account.accessToken}` },
-  });
-  console.log(`[mastodon] timeline API fetch: ${Date.now() - t0}ms`);
-
-  if (!response.ok) {
-    throw new Error(`Mastodon timeline fetch failed: ${response.status}`);
-  }
-
-  const statuses: MastodonStatus[] = await response.json();
   const tDb = Date.now();
 
   // Collect all handles, then fetch all identities in one query
@@ -448,15 +426,52 @@ export async function fetchAndStoreMastodonPosts(
         fetchedAt: new Date(),
       },
     });
-  }
-
-  await redis.set(debounceKey, "1", { ex: TTL.mastodonFetchDebounce }).catch(() => {});
-  if (rows.length > 0) {
     await redis.del(keys.timelineCache(userId, "timeline")).catch(() => {});
   }
 
   console.log(`[mastodon] DB ops (${statuses.length} statuses, ${rows.length} rows): ${Date.now() - tDb}ms`);
   return { stored: rows.length };
+}
+
+// ── Fetch & store Mastodon posts ───────────────────────────
+
+export async function fetchAndStoreMastodonPosts(
+  userId: number
+): Promise<{ stored: number }> {
+  const debounceKey = keys.mastodonFetched(userId, "timeline");
+  const recentlyFetched = await redis.get(debounceKey).catch(() => null);
+  if (recentlyFetched) {
+    console.log(`[mastodon] timeline fetch skipped (debounced)`);
+    return { stored: 0 };
+  }
+
+  const [account] = await db
+    .select()
+    .from(connectedAccounts)
+    .where(and(eq(connectedAccounts.userId, userId), eq(connectedAccounts.platform, "mastodon")))
+    .limit(1);
+
+  if (!account?.accessToken || !account.instanceUrl) {
+    throw new Error("Not authenticated with Mastodon");
+  }
+
+  const instanceUrl = account.instanceUrl;
+  const instanceHost = new URL(instanceUrl).hostname;
+
+  const t0 = Date.now();
+  const response = await fetch(`${instanceUrl}/api/v1/timelines/home?limit=40`, {
+    headers: { Authorization: `Bearer ${account.accessToken}` },
+  });
+  console.log(`[mastodon] timeline API fetch: ${Date.now() - t0}ms`);
+
+  if (!response.ok) {
+    throw new Error(`Mastodon timeline fetch failed: ${response.status}`);
+  }
+
+  const statuses: MastodonStatus[] = await response.json();
+  const result = await storeMastodonStatuses(userId, statuses, instanceHost);
+  await redis.set(debounceKey, "1", { ex: TTL.mastodonFetchDebounce }).catch(() => {});
+  return result;
 }
 
 // ── Fetch & store Mastodon mentions ──────────────────────
@@ -1455,8 +1470,11 @@ function extractLinkCard(embed: any): LinkCardData | undefined {
   };
 }
 
+// Maps a Bluesky feed item (or a bare post view wrapped as `{ post }`, e.g.
+// from getPosts in the streaming worker) into our BlueskyPostData shape. Works
+// for hydrated post views from either getTimeline/getAuthorFeed or getPosts.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
-function mapBlueskyFeedItem(item: { post: Record<string, unknown>; reason?: unknown }, isMention = false): BlueskyPostData {
+export function mapBlueskyFeedItem(item: { post: Record<string, unknown>; reason?: unknown }, isMention = false): BlueskyPostData {
   const post = item.post as {
     uri: string;
     cid: string;
