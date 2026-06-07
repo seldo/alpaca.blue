@@ -4,7 +4,7 @@ import {
   platformIdentities,
   matchSuggestions,
 } from "@/db/schema";
-import { eq, and, isNull, inArray } from "drizzle-orm";
+import { eq, and, inArray } from "drizzle-orm";
 
 // ── Types ──────────────────────────────────────────────────
 
@@ -305,7 +305,12 @@ async function evaluateBatchWithLLM(
 
 // ── Person creation ────────────────────────────────────────
 
-async function createPersonFromMatch(
+// Idempotent: if either identity already belongs to a person, link the other
+// into that existing person rather than creating a duplicate. This makes the
+// pipeline safe to re-run — e.g. to repair links after a Mastodon
+// disconnect/reconnect orphaned one side of every prior match. Only creates a
+// new person when neither side is linked yet.
+async function linkOrCreatePerson(
   userId: number,
   blueskyId: number,
   mastodonId: number,
@@ -313,23 +318,38 @@ async function createPersonFromMatch(
   blueskyName: string | null,
   mastodonName: string | null
 ): Promise<number> {
-  const displayName = blueskyName || mastodonName || "Unknown";
+  const rows = await db
+    .select({ id: platformIdentities.id, personId: platformIdentities.personId })
+    .from(platformIdentities)
+    .where(inArray(platformIdentities.id, [blueskyId, mastodonId]));
+  const bsPerson = rows.find((r) => r.id === blueskyId)?.personId ?? null;
+  const msPerson = rows.find((r) => r.id === mastodonId)?.personId ?? null;
 
-  const [result] = await db.insert(persons).values({
-    userId,
-    displayName,
-    autoMatched: true,
-    matchConfidence: confidence,
-  });
-
-  const personId = result.insertId;
+  // Prefer an existing person (Bluesky side first, since that's the one that
+  // survives a Mastodon disconnect). If both are already linked to the same
+  // person there's nothing to do.
+  let personId: number;
+  if (bsPerson && msPerson && bsPerson === msPerson) {
+    return bsPerson;
+  } else if (bsPerson) {
+    personId = bsPerson;
+  } else if (msPerson) {
+    personId = msPerson;
+  } else {
+    const displayName = blueskyName || mastodonName || "Unknown";
+    const [result] = await db.insert(persons).values({
+      userId,
+      displayName,
+      autoMatched: true,
+      matchConfidence: confidence,
+    });
+    personId = result.insertId;
+  }
 
   await db
     .update(platformIdentities)
     .set({ personId })
-    .where(
-      inArray(platformIdentities.id, [blueskyId, mastodonId])
-    );
+    .where(inArray(platformIdentities.id, [blueskyId, mastodonId]));
 
   return personId;
 }
@@ -420,7 +440,7 @@ export async function runResolutionPipeline(userId: number): Promise<ResolutionS
 
       if (result.isSamePerson && result.confidence >= 0.9) {
         status = "auto_confirmed";
-        personId = await createPersonFromMatch(
+        personId = await linkOrCreatePerson(
           userId,
           candidate.bluesky.id,
           candidate.mastodon.id,

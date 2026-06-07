@@ -108,17 +108,25 @@ export async function POST(request: Request) {
       .from(platformIdentities)
       .where(eq(platformIdentities.id, suggestion.mastodonIdentityId));
 
-    const displayName =
-      bluesky?.displayName || mastodon?.displayName || "Unknown";
-
-    const [result] = await db.insert(persons).values({
-      userId,
-      displayName,
-      autoMatched: false,
-      matchConfidence: suggestion.llmConfidence,
-    });
-
-    const personId = result.insertId;
+    // Idempotent: if either identity already belongs to a person, link the
+    // other into it rather than creating a duplicate (which would orphan the
+    // existing person). Only create a new person when neither side is linked.
+    let personId: number;
+    if (bluesky?.personId) {
+      personId = bluesky.personId;
+    } else if (mastodon?.personId) {
+      personId = mastodon.personId;
+    } else {
+      const displayName =
+        bluesky?.displayName || mastodon?.displayName || "Unknown";
+      const [result] = await db.insert(persons).values({
+        userId,
+        displayName,
+        autoMatched: false,
+        matchConfidence: suggestion.llmConfidence,
+      });
+      personId = result.insertId;
+    }
 
     await db
       .update(platformIdentities)

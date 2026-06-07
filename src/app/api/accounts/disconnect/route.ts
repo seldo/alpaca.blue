@@ -30,32 +30,22 @@ export async function POST(request: NextRequest) {
           and(eq(posts.userId, userId), eq(posts.platform, "mastodon"))
         );
 
-      // Remove Mastodon platform identities (cascades match suggestions)
+      // Keep the Mastodon platform identities — just mark them unfollowed.
+      // Deleting them used to take their cross-platform person links with them
+      // (the matched person survived with only its Bluesky side, and a later
+      // reconnect re-imported the Mastodon side as fresh rows with no person),
+      // orphaning every prior identity match. Retaining the rows means a
+      // reconnect's upsert (keyed on user+platform+handle) preserves person_id
+      // and just flips isFollowed back on. Use /disconnect "all" for a full wipe.
       await db
-        .delete(platformIdentities)
+        .update(platformIdentities)
+        .set({ isFollowed: false })
         .where(
           and(
             eq(platformIdentities.userId, userId),
             eq(platformIdentities.platform, "mastodon")
           )
         );
-
-      // Clean up orphaned persons (persons with no remaining identities)
-      const userPersons = await db
-        .select({ id: persons.id })
-        .from(persons)
-        .where(eq(persons.userId, userId));
-
-      for (const person of userPersons) {
-        const remaining = await db
-          .select({ id: platformIdentities.id })
-          .from(platformIdentities)
-          .where(eq(platformIdentities.personId, person.id))
-          .limit(1);
-        if (remaining.length === 0) {
-          await db.delete(persons).where(eq(persons.id, person.id));
-        }
-      }
 
       return NextResponse.json({ ok: true, platform: "mastodon" });
     }
