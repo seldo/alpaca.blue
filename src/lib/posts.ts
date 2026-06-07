@@ -159,11 +159,15 @@ function stripHtmlTags(html: string): string {
     .trim();
 }
 
-export function computeDedupeHash(
-  content: string,
-): string | null {
+// Content shorter than this (after normalization) is too generic to dedupe
+// across different authors — e.g. "lol", "+1", "good morning". Such posts
+// still get a hash, but the merge only fires when both sides are the same
+// person (see authorKeyFor in the query functions).
+export const DEDUP_SHORT_THRESHOLD = 20;
+
+function normalizeForDedup(content: string): string {
   // Normalize: lowercase, strip all URLs, collapse whitespace, take first 100 chars
-  const normalized = content
+  return content
     .toLowerCase()
     // Full URLs
     .replace(/https?:\/\/\S+/g, "")
@@ -174,10 +178,25 @@ export function computeDedupeHash(
     .replace(/\s+/g, " ")
     .trim()
     .slice(0, 100);
+}
 
-  if (normalized.length < 20) return null;
+export function computeDedupeHash(
+  content: string,
+): string | null {
+  const normalized = normalizeForDedup(content);
+
+  // Empty after normalization (e.g. media-only or URL-only posts) — nothing
+  // to hash. Short-but-non-empty content still gets a hash so same-author
+  // cross-posts can merge.
+  if (normalized.length === 0) return null;
 
   return createHash("sha256").update(normalized).digest("hex").slice(0, 16);
+}
+
+// True when the content is too short to confidently dedupe across different
+// authors. Short posts only merge when they share an author key.
+export function isShortDedupContent(content: string): boolean {
+  return normalizeForDedup(content).length < DEDUP_SHORT_THRESHOLD;
 }
 
 // ── Store Bluesky posts ────────────────────────────────────
@@ -285,6 +304,7 @@ export async function storeBlueskyPosts(
         isTimeline: sql`greatest(${posts.isTimeline}, values(${posts.isTimeline}))`,
         isMention: sql`greatest(${posts.isMention}, values(${posts.isMention}))`,
         content: sql`values(${posts.content})`,
+        dedupeHash: sql`values(${posts.dedupeHash})`,
         contentHtml: sql`values(${posts.contentHtml})`,
         platformPostCid: sql`values(${posts.platformPostCid})`,
         postUrl: sql`values(${posts.postUrl})`,
@@ -416,6 +436,7 @@ export async function fetchAndStoreMastodonPosts(
       set: {
         isTimeline: true,
         content: sql`values(${posts.content})`,
+        dedupeHash: sql`values(${posts.dedupeHash})`,
         contentHtml: sql`values(${posts.contentHtml})`,
         postUrl: sql`values(${posts.postUrl})`,
         quotedPost: sql`values(${posts.quotedPost})`,
@@ -578,6 +599,7 @@ export async function fetchAndStoreMastodonMentions(
       set: {
         isMention: true,
         content: sql`values(${posts.content})`,
+        dedupeHash: sql`values(${posts.dedupeHash})`,
         contentHtml: sql`values(${posts.contentHtml})`,
         postUrl: sql`values(${posts.postUrl})`,
         replyToId: sql`values(${posts.replyToId})`,
@@ -679,6 +701,7 @@ export async function fetchAndStoreOwnMastodonPosts(
     await db.insert(posts).values(rows).onDuplicateKeyUpdate({
       set: {
         content: sql`values(${posts.content})`,
+        dedupeHash: sql`values(${posts.dedupeHash})`,
         contentHtml: sql`values(${posts.contentHtml})`,
         postUrl: sql`values(${posts.postUrl})`,
         quotedPost: sql`values(${posts.quotedPost})`,
@@ -901,6 +924,34 @@ function attachPendingMirrors<T extends { id: number; alsoPostedOn: MirrorAlso[]
   }
 }
 
+// ── Dedup merge keys ───────────────────────────────────────
+
+// Identifies the author of a post for short-content dedup. Resolved persons
+// collapse across platforms via personId; the current user's own connected
+// accounts (which are never linked to a person) collapse via "self"; everyone
+// else gets a per-identity key that can't match across platforms.
+function authorKeyFor(
+  personId: number | null | undefined,
+  identityId: number | null | undefined,
+  ownIds: Set<number>,
+): string {
+  if (personId) return `p:${personId}`;
+  if (identityId != null && ownIds.has(identityId)) return "self";
+  return `i:${identityId ?? "?"}`;
+}
+
+// Builds the key for the dedup `seen` map. Long posts merge on hash alone
+// (any author). Short posts append the author key so they only collapse when
+// posted by the same person — guarding against unrelated short posts ("lol",
+// "+1") from different people being merged together.
+function dedupSeenKey(
+  hash: string,
+  content: string | null,
+  authorKey: string,
+): string {
+  return isShortDedupContent(content ?? "") ? `${hash}|${authorKey}` : hash;
+}
+
 // ── Query posts by identity IDs ────────────────────────────
 
 export async function queryPostsByIdentities(
@@ -915,6 +966,7 @@ export async function queryPostsByIdentities(
   const identityRows = await db.select().from(platformIdentities)
     .where(inArray(platformIdentities.id, identityIds));
   const identityMap = new Map(identityRows.map((i) => [i.id, i]));
+  const ownIds = new Set(await getOwnIdentityIds(userId));
 
   const fetchLimit = Math.ceil(limit * 1.5);
   const rows = await db.select().from(posts)
@@ -986,6 +1038,9 @@ export async function queryPostsByIdentities(
     const hash = post.dedupeHash;
 
     const identity = identityMap.get(post.platformIdentityId);
+    const seenKey = hash
+      ? dedupSeenKey(hash, post.content, authorKeyFor(identity?.personId, post.platformIdentityId, ownIds))
+      : null;
     const replyToAuthor = post.replyToId ? (replyToAuthorMap.get(post.replyToId) ?? null) : null;
     const entry: ProfilePost = {
       id: post.id,
@@ -1016,8 +1071,8 @@ export async function queryPostsByIdentities(
       replyToAuthor,
     };
 
-    if (hash && seen.has(hash)) {
-      const existingIdx = seen.get(hash)!;
+    if (seenKey && seen.has(seenKey)) {
+      const existingIdx = seen.get(seenKey)!;
       const existing = result[existingIdx];
 
       // Both Bluesky and Mastodon can carry native quoted posts now. When a
@@ -1054,7 +1109,7 @@ export async function queryPostsByIdentities(
       continue;
     }
 
-    if (hash) seen.set(hash, result.length);
+    if (seenKey) seen.set(seenKey, result.length);
     result.push(entry);
 
     if (result.length === limit) break;
@@ -1162,6 +1217,7 @@ export async function queryTimeline(
 
   const mirrorOf = await loadCrossPostMirrors(userId);
   const pendingMirrors = new Map<number, MirrorAlso[]>();
+  const ownIds = new Set(await getOwnIdentityIds(userId));
 
   const seen = new Map<string, number>();
   const result: TimelinePost[] = [];
@@ -1183,6 +1239,9 @@ export async function queryTimeline(
     }
 
     const hash = row.post.dedupeHash;
+    const seenKey = hash
+      ? dedupSeenKey(hash, row.post.content, authorKeyFor(row.identity?.personId, row.post.platformIdentityId, ownIds))
+      : null;
 
     const entry: TimelinePost = {
       id: row.post.id,
@@ -1213,8 +1272,8 @@ export async function queryTimeline(
       replyToMe: type === "mentions" && !!row.post.replyToId,
     };
 
-    if (hash && seen.has(hash)) {
-      const existingIdx = seen.get(hash)!;
+    if (seenKey && seen.has(seenKey)) {
+      const existingIdx = seen.get(seenKey)!;
       const existing = result[existingIdx];
 
       // When a cross-posted pair collides, prefer whichever side has the
@@ -1250,7 +1309,7 @@ export async function queryTimeline(
       continue;
     }
 
-    if (hash) seen.set(hash, result.length);
+    if (seenKey) seen.set(seenKey, result.length);
     result.push(entry);
   }
 
@@ -1766,6 +1825,7 @@ export async function fetchAndStoreMastodonAuthorPosts(
     await db.insert(posts).values(rows).onDuplicateKeyUpdate({
       set: {
         content: sql`values(${posts.content})`,
+        dedupeHash: sql`values(${posts.dedupeHash})`,
         contentHtml: sql`values(${posts.contentHtml})`,
         postUrl: sql`values(${posts.postUrl})`,
         media: sql`values(${posts.media})`,
