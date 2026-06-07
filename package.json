@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "worker": "tsx worker/index.ts"
   },
   "dependencies": {
     "@atproto/api": "^0.19.3",
@@ -28,6 +29,7 @@
     "drizzle-kit": "^0.31.9",
     "eslint": "^9",
     "eslint-config-next": "16.1.6",
+    "tsx": "^4.22.4",
     "typescript": "^5"
   }
 }

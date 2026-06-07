@@ -1,0 +1,29 @@
+# Fly config for the alpaca.blue streaming sync worker.
+# Deploy from the repo root:
+#   flyctl deploy --config worker/fly.toml --dockerfile worker/Dockerfile
+#
+# This is a worker — no [http_service], so the machine isn't subject to
+# HTTP-idle autostop and runs continuously. Keep exactly one machine:
+#   flyctl scale count 1 --config worker/fly.toml
+app = "alpaca-blue-worker"
+primary_region = "sjc"
+
+# SSE push endpoint. The worker must always run (it holds the streams), so
+# disable idle autostop and keep one machine up.
+[http_service]
+  internal_port = 8080
+  force_https = true
+  auto_stop_machines = false
+  auto_start_machines = false
+  min_machines_running = 1
+
+  [[http_service.checks]]
+    interval = "30s"
+    timeout = "5s"
+    grace_period = "15s"
+    method = "GET"
+    path = "/health"
+
+[[vm]]
+  size = "shared-cpu-1x"
+  memory = "512mb"

@@ -23,6 +23,11 @@ export const keys = {
     `${KEY_PREFIX}bluesky:reactions:${userId}`,
   authorFeedCursor: (userId: number, identityId: number) =>
     `${KEY_PREFIX}author:cursor:${userId}:${identityId}`,
+  // Short-lived token → userId, minted by the app (which has the session) and
+  // validated by the streaming worker on SSE connect. Lets the cross-origin
+  // EventSource authenticate without the iron-session cookie (which isn't sent
+  // to the worker's domain).
+  realtimeToken: (token: string) => `${KEY_PREFIX}realtime:token:${token}`,
 };
 
 // TTLs (seconds)
@@ -33,4 +38,5 @@ export const TTL = {
   mastodonReactions: 60,
   blueskyReactions: 60,
   authorFeedCursor: 3600,
+  realtimeToken: 3600,
 };
