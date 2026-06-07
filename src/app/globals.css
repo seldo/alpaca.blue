@@ -1293,6 +1293,41 @@ body {
   flex-direction: column;
 }
 
+/* "N new posts" pill — sticks just below the top so it stays reachable while
+   scrolled, and doesn't shift the feed (new posts are held back until tapped). */
+.new-posts-pill-wrap {
+  position: sticky;
+  top: 8px;
+  z-index: 50;
+  display: flex;
+  justify-content: center;
+  pointer-events: none;
+  height: 0;
+}
+
+.new-posts-pill {
+  pointer-events: auto;
+  background: var(--color-primary);
+  color: #fff;
+  border: none;
+  border-radius: 999px;
+  padding: 8px 16px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.18);
+  transition: transform 0.12s ease, opacity 0.12s ease;
+}
+
+.new-posts-pill:hover {
+  transform: translateY(-1px);
+}
+
+.new-posts-pill:active {
+  transform: translateY(0);
+  opacity: 0.9;
+}
+
 /* Thread view */
 .thread-view {
   display: flex;

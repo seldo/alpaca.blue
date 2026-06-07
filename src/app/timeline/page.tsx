@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
 import { useRouter } from "next/navigation";
 import { usePullToRefresh } from "@/lib/usePullToRefresh";
+import { useRealtimeUpdates } from "@/lib/useRealtimeUpdates";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
 
@@ -54,9 +55,17 @@ export default function TimelinePage() {
   const [fetching, setFetching] = useState(false);
   const [fetchError, setFetchError] = useState<string | null>(null);
   const [loadingMore, setLoadingMore] = useState(false);
+  const [newCount, setNewCount] = useState(0);
   const pendingScrollRestore = useRef<number | null>(null);
   const isFetchingRef = useRef(false);
   const fetchControllerRef = useRef<AbortController | null>(null);
+  // Latest posts (for stale-closure-free comparison) + the pre-fetched first
+  // page behind the "N new posts" pill, applied instantly when tapped.
+  const postsRef = useRef<PostData[]>([]);
+  useEffect(() => {
+    postsRef.current = posts;
+  }, [posts]);
+  const pendingRef = useRef<{ posts: PostData[]; nextCursor: string | null } | null>(null);
 
   const fetchTimeline = useCallback(async (cursor?: string) => {
     const params = new URLSearchParams({ limit: "50" });
@@ -92,6 +101,9 @@ export default function TimelinePage() {
         const data = await res.json();
         setPosts(data.posts);
         setNextCursor(data.nextCursor);
+        // Feed is now current — drop any pending "new posts" pill.
+        pendingRef.current = null;
+        setNewCount(0);
       }
     } catch (err) {
       console.error("Feed fetch error:", err);
@@ -134,10 +146,49 @@ export default function TimelinePage() {
     refreshFeed();
   }, [refreshFeed]);
 
+  // Slower safety-net poll now that the streaming worker keeps the timeline
+  // warm in real time (and mentions/reactions still need the occasional sweep).
   useEffect(() => {
-    const id = setInterval(heartbeat, 7000);
+    const id = setInterval(heartbeat, 30000);
     return () => clearInterval(id);
   }, [heartbeat]);
+
+  // Streaming nudge → fetch the first page and, if it contains posts newer than
+  // what's on screen, stash it behind a "N new posts" pill (no feed jump).
+  const checkForNew = useCallback(async () => {
+    if (document.hidden) return;
+    try {
+      const data = await fetchTimeline();
+      const current = postsRef.current;
+      const currentKeys = new Set(current.map((p) => `${p.platform}-${p.id}`));
+      const topPostedAt = current[0]?.postedAt;
+      const fresh = (data.posts as PostData[]).filter(
+        (p) =>
+          !currentKeys.has(`${p.platform}-${p.id}`) &&
+          (!topPostedAt || p.postedAt > topPostedAt),
+      );
+      if (fresh.length > 0) {
+        pendingRef.current = { posts: data.posts, nextCursor: data.nextCursor };
+        setNewCount(fresh.length);
+      }
+    } catch {
+      /* ignore — next nudge or refresh will catch up */
+    }
+  }, [fetchTimeline]);
+
+  useRealtimeUpdates(checkForNew);
+
+  const showNewPosts = useCallback(() => {
+    const pending = pendingRef.current;
+    if (pending) {
+      setPosts(pending.posts);
+      setNextCursor(pending.nextCursor);
+      pendingRef.current = null;
+    }
+    setNewCount(0);
+    sessionStorage.removeItem("timeline_scroll");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }, []);
 
   // Refresh after a successful compose. AppLayout owns the modal, so we
   // can't call onPosted directly — listen for the event it dispatches.
@@ -239,6 +290,14 @@ export default function TimelinePage() {
       {(pullDistance > 0 || pullRefreshing) && (
         <div className="pull-indicator" style={{ height: pullRefreshing ? 48 : pullDistance * 0.5 }}>
           <div className="spinner" style={{ opacity: pullRefreshing ? 1 : pullDistance > 0 ? 0.4 + 0.6 * (pullDistance / 72) : 0 }} />
+        </div>
+      )}
+
+      {newCount > 0 && (
+        <div className="new-posts-pill-wrap">
+          <button className="new-posts-pill" onClick={showNewPosts}>
+            ↑ {newCount} new {newCount === 1 ? "post" : "posts"}
+          </button>
         </div>
       )}
 
