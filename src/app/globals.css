@@ -2136,6 +2136,27 @@ a.post-timestamp:hover {
   font-size: 1rem;
 }
 
+/* Desktop drag-and-drop: overlay shown while dragging image files over the
+   compose form. The form is the positioning context for the overlay. */
+.create-post-form {
+  position: relative;
+}
+
+.create-post-dropzone {
+  position: absolute;
+  inset: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px dashed var(--color-primary);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--color-primary) 8%, var(--color-bg));
+  color: var(--color-primary);
+  font-weight: 600;
+  pointer-events: none;
+}
+
 /* Desktop compose: bigger surface than the inline reply input it shares
    styles with. Placed after .post-reply-input below so the overrides win. */
 @media (min-width: 640px) {

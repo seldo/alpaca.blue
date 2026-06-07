@@ -149,25 +149,40 @@ export function CreatePost({ onClose, onPosted, replyTo, quoteOf }: CreatePostPr
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [editingAltIndex, setEditingAltIndex] = useState<number | null>(null);
+  const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const hasContent = text.trim().length > 0 || images.length > 0;
   const canPost = hasContent && text.length <= MAX_LENGTH && !posting;
 
-  async function handleImageSelect(e: React.ChangeEvent<HTMLInputElement>) {
-    const files = Array.from(e.target.files || []);
-    if (!files.length) return;
+  // Shared by the file picker and desktop drag-and-drop. Filters to images,
+  // respects the MAX_IMAGES cap, compresses, and appends.
+  async function addFiles(files: File[]) {
+    const imageFiles = files.filter((f) => f.type.startsWith("image/"));
+    if (!imageFiles.length) return;
 
     const remaining = MAX_IMAGES - images.length;
-    const toAdd = files.slice(0, remaining);
-
-    // Reset input so same file can be re-selected after removal
-    if (fileInputRef.current) fileInputRef.current.value = "";
+    const toAdd = imageFiles.slice(0, remaining);
+    if (!toAdd.length) return;
 
     const compressed = await Promise.all(toAdd.map(compressImage));
     setImages((prev) => [...prev, ...compressed]);
     setPreviews((prev) => [...prev, ...compressed.map((f) => URL.createObjectURL(f))]);
     setAlts((prev) => [...prev, ...compressed.map(() => "")]);
+  }
+
+  async function handleImageSelect(e: React.ChangeEvent<HTMLInputElement>) {
+    const files = Array.from(e.target.files || []);
+    // Reset input so the same file can be re-selected after removal
+    if (fileInputRef.current) fileInputRef.current.value = "";
+    await addFiles(files);
+  }
+
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault();
+    setDragOver(false);
+    if (posting) return;
+    addFiles(Array.from(e.dataTransfer.files));
   }
 
   function removeImage(index: number) {
@@ -380,7 +395,25 @@ export function CreatePost({ onClose, onPosted, replyTo, quoteOf }: CreatePostPr
   const reference = replyTo ?? quoteOf;
 
   return (
-    <form onSubmit={handleSubmit} className="create-post-form">
+    <form
+      onSubmit={handleSubmit}
+      className={`create-post-form${dragOver ? " drag-over" : ""}`}
+      onDragOver={(e) => {
+        // Only react to file drags, and preventDefault to allow the drop.
+        if (e.dataTransfer.types.includes("Files")) {
+          e.preventDefault();
+          if (!posting) setDragOver(true);
+        }
+      }}
+      onDragLeave={(e) => {
+        // Ignore leaves into descendant elements.
+        if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOver(false);
+      }}
+      onDrop={handleDrop}
+    >
+      {dragOver && (
+        <div className="create-post-dropzone">Drop images to attach</div>
+      )}
       {reference && (
         <>
           <div className="create-post-reply-target">
