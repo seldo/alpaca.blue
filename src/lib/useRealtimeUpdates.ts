@@ -2,12 +2,15 @@
 
 import { useEffect, useRef } from "react";
 
-// Subscribes to the streaming worker's SSE channel and calls `onNudge` whenever
-// the worker reports that new posts have landed for this user. Auth is via a
-// short-lived token from /api/realtime/token (the cross-origin EventSource
-// can't use the session cookie). Handles reconnect + token refresh: on any
-// error we close and reconnect, which mints a fresh token.
-export function useRealtimeUpdates(onNudge: () => void): void {
+export type RealtimeChannel = "timeline" | "mentions" | "reactions";
+
+// Subscribes to the streaming worker's SSE channels and calls `onNudge(channel)`
+// whenever the worker reports new activity for this user (a followed post, a
+// mention, or a reaction). Auth is via a short-lived token from
+// /api/realtime/token (the cross-origin EventSource can't use the session
+// cookie). Handles reconnect + token refresh: on any error we close and
+// reconnect, which mints a fresh token.
+export function useRealtimeUpdates(onNudge: (channel: RealtimeChannel) => void): void {
   const onNudgeRef = useRef(onNudge);
   useEffect(() => {
     onNudgeRef.current = onNudge;
@@ -28,7 +31,10 @@ export function useRealtimeUpdates(onNudge: () => void): void {
         if (!token || !workerUrl || stopped) return schedule();
 
         es = new EventSource(`${workerUrl}/events?token=${encodeURIComponent(token)}`);
-        es.addEventListener("timeline", () => onNudgeRef.current());
+        const channels: RealtimeChannel[] = ["timeline", "mentions", "reactions"];
+        for (const ch of channels) {
+          es.addEventListener(ch, () => onNudgeRef.current(ch));
+        }
         es.onopen = () => {
           backoff = 2000;
         };

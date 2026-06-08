@@ -127,16 +127,10 @@ export default function TimelinePage() {
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, []);
 
-  const heartbeat = useCallback(() => {
-    if (document.hidden) return;
-    fetch("/api/posts/heartbeat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    }).catch(() => {});
-  }, []);
-
-  // After posting: bust debounce/cache then do a full UI refresh
+  // After posting / tap-to-refresh: force a full platform fetch then refresh the
+  // UI. There's no periodic poll anymore — the streaming worker keeps the
+  // timeline warm and the SSE channel below pushes a nudge when there's
+  // something new; this force path is the explicit catch-up + own-post capture.
   const forceRefresh = useCallback(async () => {
     await fetch("/api/posts/heartbeat", {
       method: "POST",
@@ -145,13 +139,6 @@ export default function TimelinePage() {
     }).catch(() => {});
     refreshFeed();
   }, [refreshFeed]);
-
-  // Slower safety-net poll now that the streaming worker keeps the timeline
-  // warm in real time (and mentions/reactions still need the occasional sweep).
-  useEffect(() => {
-    const id = setInterval(heartbeat, 30000);
-    return () => clearInterval(id);
-  }, [heartbeat]);
 
   // Streaming nudge → fetch the first page and, if it contains posts newer than
   // what's on screen, stash it behind a "N new posts" pill (no feed jump).
@@ -176,7 +163,9 @@ export default function TimelinePage() {
     }
   }, [fetchTimeline]);
 
-  useRealtimeUpdates(checkForNew);
+  useRealtimeUpdates((channel) => {
+    if (channel === "timeline") checkForNew();
+  });
 
   const showNewPosts = useCallback(() => {
     const pending = pendingRef.current;

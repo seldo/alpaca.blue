@@ -10,7 +10,7 @@
 import { db } from "@/db";
 import { connectedAccounts } from "@/db/schema";
 import { eq } from "drizzle-orm";
-import { storeMastodonStatuses, type MastodonStatus } from "@/lib/posts";
+import { storeMastodonStatuses, storeMastodonMentionStatuses, type MastodonStatus } from "@/lib/posts";
 import { notifyUser } from "./sse-server";
 
 const ACCOUNT_REFRESH_MS = 2 * 60 * 1000; // re-scan connected accounts every 2 min
@@ -90,24 +90,51 @@ async function connect(conn: Conn): Promise<void> {
     } catch {
       return;
     }
-    // New posts in the home timeline (and edits). Notifications/deletes are
-    // ignored here — mentions still come via the existing poll.
-    if (msg.event !== "update" && msg.event !== "status.update") return;
-    if (!msg.payload) return;
-    let status: MastodonStatus;
-    try {
-      status = JSON.parse(msg.payload);
-    } catch {
+
+    // Home-timeline posts (and edits).
+    if (msg.event === "update" || msg.event === "status.update") {
+      if (!msg.payload) return;
+      let status: MastodonStatus;
+      try {
+        status = JSON.parse(msg.payload);
+      } catch {
+        return;
+      }
+      storeMastodonStatuses(conn.userId, [status], conn.instanceHost)
+        .then((r) => {
+          if (r.stored > 0) {
+            notifyUser(conn.userId, "timeline");
+            console.log(`[mastodon-sync] stored ${r.stored} timeline row(s) for user ${conn.userId}`);
+          }
+        })
+        .catch((err) => console.error("[mastodon-sync] store error:", err));
       return;
     }
-    storeMastodonStatuses(conn.userId, [status], conn.instanceHost)
-      .then((r) => {
-        if (r.stored > 0) {
-          notifyUser(conn.userId);
-          console.log(`[mastodon-sync] stored ${r.stored} row(s) for user ${conn.userId}`);
-        }
-      })
-      .catch((err) => console.error("[mastodon-sync] store error:", err));
+
+    // Notifications: mentions become mention rows; faves/boosts/follows just
+    // bust the reactions cache and nudge (the app re-fetches the hydrated list).
+    if (msg.event === "notification") {
+      if (!msg.payload) return;
+      let note: { type?: string; status?: MastodonStatus };
+      try {
+        note = JSON.parse(msg.payload);
+      } catch {
+        return;
+      }
+      if (note.type === "mention" && note.status) {
+        storeMastodonMentionStatuses(conn.userId, [note.status], conn.instanceHost)
+          .then((r) => {
+            if (r.stored > 0) {
+              notifyUser(conn.userId, "mentions");
+              console.log(`[mastodon-sync] stored mention for user ${conn.userId}`);
+            }
+          })
+          .catch((err) => console.error("[mastodon-sync] mention store error:", err));
+      } else if (note.type === "favourite" || note.type === "reblog" || note.type === "follow") {
+        notifyUser(conn.userId, "reactions");
+      }
+      return;
+    }
   };
 
   ws.onerror = (event: Event) => {

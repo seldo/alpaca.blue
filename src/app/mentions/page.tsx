@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useLayoutEffect, useMemo } from "react";
 import { usePullToRefresh } from "@/lib/usePullToRefresh";
+import { useRealtimeUpdates } from "@/lib/useRealtimeUpdates";
 import { PostCard } from "@/components/PostCard";
 import { ReactionCard } from "@/components/ReactionCard";
 import { AppLayout } from "@/components/AppHeader";
@@ -130,27 +131,31 @@ export default function MentionsPage() {
     return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
   }, []);
 
-  const heartbeat = useCallback(() => {
-    if (document.hidden) return;
-    fetch("/api/posts/heartbeat", {
+  // Force a full platform fetch (catch-up / safety net), then refresh the UI.
+  // No periodic poll — the worker streams mentions + reactions and the SSE
+  // channel pushes nudges; this is the explicit refresh path.
+  const forceRefresh = useCallback(async () => {
+    await fetch("/api/posts/heartbeat", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
+      body: JSON.stringify({ force: true }),
     }).catch(() => {});
-  }, []);
+    refreshFeed();
+  }, [refreshFeed]);
 
-  useEffect(() => {
-    const id = setInterval(heartbeat, 7000);
-    return () => clearInterval(id);
-  }, [heartbeat]);
+  // Live updates: a mention lands (stored by the worker → re-read the feed) or a
+  // reaction lands (worker busted the reactions cache → re-fetch it fresh).
+  useRealtimeUpdates((channel) => {
+    if (channel === "mentions" || channel === "reactions") refreshFeed({ silent: true });
+  });
 
   // Bottom-nav tap-on-active-tab: AppHeader dispatches feed:refresh after
-  // scrolling to the top, we re-fetch the feed.
+  // scrolling to the top; do a full force-refresh.
   useEffect(() => {
-    function handler() { refreshFeed(); }
+    function handler() { forceRefresh(); }
     window.addEventListener("feed:refresh", handler);
     return () => window.removeEventListener("feed:refresh", handler);
-  }, [refreshFeed]);
+  }, [forceRefresh]);
 
   const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refreshFeed, fetching);
 

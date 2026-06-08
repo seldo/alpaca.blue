@@ -526,8 +526,24 @@ export async function fetchAndStoreMastodonMentions(
 
   const notifications: MastodonNotification[] = await response.json();
   const statuses = notifications.map((n) => n.status).filter(Boolean) as MastodonStatus[];
-  const tDb = Date.now();
 
+  const result = await storeMastodonMentionStatuses(userId, statuses, instanceHost);
+  await redis.set(debounceKey, "1", { ex: TTL.mastodonFetchDebounce }).catch(() => {});
+  return result;
+}
+
+// Stores Mastodon statuses as mentions (isMention=true), inserting identities
+// for accounts the user doesn't follow (people who mentioned them). Split out of
+// fetchAndStoreMastodonMentions so the streaming worker can store a mention that
+// arrives as a `notification` event on the user WebSocket.
+export async function storeMastodonMentionStatuses(
+  userId: number,
+  statuses: MastodonStatus[],
+  instanceHost: string,
+): Promise<{ stored: number }> {
+  if (statuses.length === 0) return { stored: 0 };
+
+  const tDb = Date.now();
   const handleOf = (acct: string) =>
     acct.includes("@") ? `@${acct}` : `@${acct}@${instanceHost}`;
 
@@ -634,14 +650,10 @@ export async function fetchAndStoreMastodonMentions(
         fetchedAt: new Date(),
       },
     });
-  }
-
-  await redis.set(debounceKey, "1", { ex: TTL.mastodonFetchDebounce }).catch(() => {});
-  if (rows.length > 0) {
     await redis.del(keys.timelineCache(userId, "mentions")).catch(() => {});
   }
 
-  console.log(`[mastodon] DB ops (${statuses.length} mentions, ${rows.length} rows): ${Date.now() - tDb}ms`);
+  console.log(`[mastodon] mention DB ops (${statuses.length} statuses, ${rows.length} rows): ${Date.now() - tDb}ms`);
   return { stored: rows.length };
 }
 

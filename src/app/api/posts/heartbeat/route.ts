@@ -32,22 +32,20 @@ export async function POST(request: NextRequest) {
       ]);
     }
 
-    // The streaming worker keeps the home timeline warm in real time, so the
-    // periodic heartbeat no longer polls timeline posts — that's the bulk of the
-    // upstream Bluesky/Mastodon traffic eliminated. Mentions and reactions
-    // aren't streamed yet, so they keep polling. Timeline is still fetched on a
-    // `force` request (compose / tap-to-refresh) so the user's *own* posts —
-    // which the worker doesn't watch — get captured promptly.
-    const tasks = [
+    // The streaming worker now keeps timeline, mentions, and reactions warm in
+    // real time, so there's no periodic poll anymore — this endpoint is only
+    // hit on an explicit refresh (compose / tap-to-refresh). It does a full
+    // fetch from both platforms: a manual catch-up + safety net if the worker
+    // missed anything, and the way the user's own posts (which the worker
+    // doesn't watch) get captured.
+    const results = await Promise.allSettled([
+      fetchAndStoreBlueskyPosts(userId),
+      fetchAndStoreMastodonPosts(userId),
       fetchAndStoreBlueskyMentions(userId),
       fetchAndStoreMastodonMentions(userId),
       fetchBlueskyReactions(userId),
       fetchMastodonReactions(userId),
-    ];
-    if (force) {
-      tasks.push(fetchAndStoreBlueskyPosts(userId), fetchAndStoreMastodonPosts(userId));
-    }
-    const results = await Promise.allSettled(tasks);
+    ]);
     results.forEach((r, i) => {
       if (r.status === "rejected") {
         console.error(`[heartbeat] fetch[${i}] error:`, r.reason);

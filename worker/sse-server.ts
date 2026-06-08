@@ -19,36 +19,55 @@ const ALLOW_ORIGIN = process.env.APP_URL || "*";
 const HEARTBEAT_MS = 25000; // keep proxies/Fly from idling the connection
 const NUDGE_FLUSH_MS = 2000; // coalesce bursts of stores into one client nudge
 
+export type Channel = "timeline" | "mentions" | "reactions";
+
 // userId -> set of open SSE responses
 const clients = new Map<number, Set<ServerResponse>>();
-// userIds with a pending nudge, flushed on an interval
-const pendingNudges = new Set<number>();
+// userId -> set of channels with a pending nudge, flushed on an interval
+let pendingNudges = new Map<number, Set<Channel>>();
 
 function corsHeaders(): Record<string, string> {
   return { "Access-Control-Allow-Origin": ALLOW_ORIGIN };
 }
 
-// Called by the sync modules after storing new posts for a user. Coalesced so a
-// burst of fan-out writes produces at most one nudge per flush window.
-export function notifyUser(userId: number): void {
-  pendingNudges.add(userId);
+// Called by the sync modules when something new landed for a user, tagged by
+// which feed changed. Coalesced so a burst produces at most one nudge per
+// channel per flush window.
+export function notifyUser(userId: number, channel: Channel = "timeline"): void {
+  let set = pendingNudges.get(userId);
+  if (!set) {
+    set = new Set();
+    pendingNudges.set(userId, set);
+  }
+  set.add(channel);
 }
 
-function flushNudges(): void {
+async function flushNudges(): Promise<void> {
   if (pendingNudges.size === 0) return;
-  for (const userId of pendingNudges) {
+  const batch = pendingNudges;
+  pendingNudges = new Map();
+
+  for (const [userId, channels] of batch) {
+    // Reactions are served from a Redis cache the app polls; bust it before
+    // nudging so the client's re-fetch returns fresh data (the worker doesn't
+    // rebuild the cache itself).
+    if (channels.has("reactions")) {
+      await redis.del(keys.blueskyReactions(userId)).catch(() => {});
+      await redis.del(keys.mastodonReactions(userId)).catch(() => {});
+    }
     const set = clients.get(userId);
     if (!set || set.size === 0) continue;
-    const payload = `event: timeline\ndata: {}\n\n`;
-    for (const res of set) {
-      try {
-        res.write(payload);
-      } catch {
-        // dead connection; the 'close' handler will clean it up
+    for (const channel of channels) {
+      const payload = `event: ${channel}\ndata: {}\n\n`;
+      for (const res of set) {
+        try {
+          res.write(payload);
+        } catch {
+          // dead connection; the 'close' handler will clean it up
+        }
       }
     }
   }
-  pendingNudges.clear();
 }
 
 export function startSseServer(): void {
@@ -112,7 +131,9 @@ export function startSseServer(): void {
     });
   });
 
-  setInterval(flushNudges, NUDGE_FLUSH_MS);
+  setInterval(() => {
+    flushNudges().catch((err) => console.error("[sse] flush error:", err));
+  }, NUDGE_FLUSH_MS);
 
   server.listen(PORT, "0.0.0.0", () => {
     console.log(`[sse] listening on :${PORT}`);
