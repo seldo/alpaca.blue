@@ -436,9 +436,13 @@ export function PostCard({ post }: { post: PostData }) {
     }
   }
 
+  // Only link to an in-app identity page when we actually have one. Authors who
+  // aren't in the identity map (not followed / not matched — e.g. a reposted or
+  // replied-to account) keep author.id === 0; linking those to /identities/0 is
+  // a dead end, so the avatar just renders unlinked (the handle still links out).
   const avatarLink = post.person
     ? `/persons/${post.person.id}`
-    : author
+    : author && author.id > 0
     ? `/identities/${author.id}`
     : null;
 
