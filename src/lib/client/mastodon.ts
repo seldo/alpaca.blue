@@ -130,12 +130,37 @@ export async function lookupMastodonAccount(
   handle: string,
 ): Promise<MastodonAccountView | null> {
   const acct = handle.replace(/^@/, "");
+  const headers = { Authorization: `Bearer ${creds.accessToken}` };
+
+  // Fast path: accounts the instance already knows. /lookup is local-only — it
+  // does NOT WebFinger unknown remote accounts, so it 404s for those.
   const res = await fetch(
     `${creds.instanceUrl}/api/v1/accounts/lookup?acct=${encodeURIComponent(acct)}`,
-    { headers: { Authorization: `Bearer ${creds.accessToken}` } },
+    { headers },
   );
-  if (!res.ok) return null;
-  return res.json();
+  if (res.ok) return res.json();
+
+  // Fallback: search with resolve=true WebFingers the remote account and pulls
+  // it in. Match the exact acct so we don't return a fuzzy hit. A handle on the
+  // viewer's own instance comes back as a bare username, so accept that too.
+  const searchRes = await fetch(
+    `${creds.instanceUrl}/api/v2/search?q=${encodeURIComponent(acct)}&type=accounts&resolve=true&limit=5`,
+    { headers },
+  );
+  if (!searchRes.ok) return null;
+  const data = await searchRes.json();
+  const accounts: MastodonAccountView[] = data.accounts || [];
+  const want = acct.toLowerCase();
+  const instanceHost = new URL(creds.instanceUrl).hostname.toLowerCase();
+  const wantLocal = want.endsWith(`@${instanceHost}`)
+    ? want.slice(0, -(instanceHost.length + 1))
+    : want;
+  return (
+    accounts.find((a) => {
+      const got = a.acct.toLowerCase();
+      return got === want || got === wantLocal;
+    }) ?? null
+  );
 }
 
 // Resolves a status by its URL (any instance) via search, for cross-post mirror
