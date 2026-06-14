@@ -17,18 +17,30 @@ export interface IdentityInfo {
 
 export interface IdentityMap {
   byHandle: Map<string, IdentityInfo>;
+  // Normalized handles of the viewer's own connected accounts (see normHandle).
+  myHandles: Set<string>;
 }
 
 type RawIdentity = { id: number; personId: number | null; handle: string };
+
+// Normalizes a handle for "is this me?" matching: lowercase, no leading @.
+// Bluesky handles are bare ("seldo.com"); Mastodon are "@user@instance".
+function normHandle(handle: string): string {
+  return handle.trim().toLowerCase().replace(/^@/, "");
+}
 
 let mapPromise: Promise<IdentityMap> | null = null;
 
 async function loadMap(): Promise<IdentityMap> {
   const byHandle = new Map<string, IdentityInfo>();
+  const myHandles = new Set<string>();
+  const [identitiesRes, accountsRes] = await Promise.allSettled([
+    fetch("/api/graph/identities"),
+    fetch("/api/accounts"),
+  ]);
   try {
-    const res = await fetch("/api/graph/identities");
-    if (res.ok) {
-      const data = await res.json();
+    if (identitiesRes.status === "fulfilled" && identitiesRes.value.ok) {
+      const data = await identitiesRes.value.json();
       const personName = new Map<number, string | null>();
       for (const p of data.persons || []) personName.set(p.id, p.displayName ?? null);
       const all: RawIdentity[] = [
@@ -46,7 +58,15 @@ async function loadMap(): Promise<IdentityMap> {
   } catch (err) {
     console.error("[identities] map load failed:", err);
   }
-  return { byHandle };
+  try {
+    if (accountsRes.status === "fulfilled" && accountsRes.value.ok) {
+      const accounts: Array<{ handle?: string }> = await accountsRes.value.json();
+      for (const a of accounts) if (a.handle) myHandles.add(normHandle(a.handle));
+    }
+  } catch (err) {
+    console.error("[identities] accounts load failed:", err);
+  }
+  return { byHandle, myHandles };
 }
 
 // Cached for the session (the matching results change rarely). Pass force after
@@ -61,6 +81,7 @@ export function getIdentityMap(force = false): Promise<IdentityMap> {
 // which is exactly how platformIdentities stores them.
 export function enrichAuthor(post: ClientPost, map: IdentityMap): void {
   if (!post.author) return;
+  if (map.myHandles.has(normHandle(post.author.handle))) post.author.isSelf = true;
   const info = map.byHandle.get(post.author.handle);
   if (!info) return;
   post.author.id = info.id;

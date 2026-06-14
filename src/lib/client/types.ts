@@ -72,6 +72,10 @@ export interface ClientPost {
     avatarUrl: string | null;
     platform: string;
     profileUrl: string | null;
+    // Set by enrichAuthor when this post is by one of the viewer's own
+    // connected accounts. Lets dedup collapse the viewer's cross-posts even
+    // before identity resolution links the two accounts to a person.
+    isSelf?: boolean;
   } | null;
   person: { id: number; displayName: string | null } | null;
   alsoPostedOn: CrossPost[];

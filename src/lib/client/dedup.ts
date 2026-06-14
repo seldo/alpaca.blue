@@ -44,6 +44,9 @@ export async function attachDedupeHashes(posts: ClientPost[]): Promise<ClientPos
 // platforms. (The current user's own accounts collapse once person enrichment
 // lands; for now they key by handle like anyone else.)
 function authorKeyFor(post: ClientPost): string {
+  // The viewer's own accounts share one bucket so their cross-posts collapse
+  // even before identity resolution links the accounts to a person.
+  if (post.author?.isSelf) return "me";
   if (post.person?.id) return `p:${post.person.id}`;
   return `h:${post.author?.handle ?? "?"}`;
 }
