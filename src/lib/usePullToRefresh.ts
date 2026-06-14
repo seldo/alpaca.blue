@@ -141,7 +141,6 @@ export function usePullToRefresh(onRefresh: () => Promise<void>, disabled = fals
       window.removeEventListener("wheel", onWheel);
       if (wheelResetTimer.current) clearTimeout(wheelResetTimer.current);
     };
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   return { pullDistance, refreshing };

@@ -42,7 +42,7 @@ html {
 body {
   background: var(--color-bg);
   color: var(--color-text);
-  font-family: 'Work Sans', system-ui, -apple-system, sans-serif;
+  font-family: var(--font-work-sans), 'Work Sans', system-ui, -apple-system, sans-serif;
   min-height: 100vh;
   -webkit-font-smoothing: antialiased;
   overflow-x: hidden;

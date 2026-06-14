@@ -2,11 +2,7 @@
 
 import { useState } from "react";
 
-export function BlueskyConnect({
-  onConnected,
-}: {
-  onConnected: () => void;
-}) {
+export function BlueskyConnect() {
   const [handle, setHandle] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
