@@ -73,7 +73,13 @@ function applyTabFilter(posts: ClientPost[], tab: Tab): ClientPost[] {
 export default function IdentityPage() {
   const params = useParams();
   const router = useRouter();
-  const identityId = params.id as string;
+  // useParams can hand back the segment still percent-encoded (e.g. the
+  // "<platform>:<handle>" actor key), so decode defensively. Numeric ids and
+  // already-decoded values pass through unchanged.
+  const rawId = params.id as string;
+  const identityId = (() => {
+    try { return decodeURIComponent(rawId); } catch { return rawId; }
+  })();
 
   const [identity, setIdentity] = useState<Identity | null>(null);
   const [stats, setStats] = useState<Stats | null>(null);
