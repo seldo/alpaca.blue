@@ -180,19 +180,6 @@ function getPostUrl(post: PostData): string | null {
   return null;
 }
 
-function getProfileUrl(author: PostData["author"]): string | null {
-  if (!author) return null;
-  if (author.profileUrl) return author.profileUrl;
-  if (author.platform === "bluesky") {
-    return `https://bsky.app/profile/${author.handle}`;
-  }
-  if (author.platform === "mastodon") {
-    const match = author.handle.match(/^@([^@]+)@(.+)$/);
-    if (match) return `https://${match[2]}/@${match[1]}`;
-  }
-  return null;
-}
-
 function getQuotedPostUrl(quotedPost: NonNullable<PostData["quotedPost"]>): string | null {
   // Mastodon (and recently-stored Bluesky) rows carry a canonical postUrl.
   if (quotedPost.postUrl) return quotedPost.postUrl;
@@ -251,12 +238,7 @@ export function PostCard({ post }: { post: PostData }) {
     ? post.media
     : [];
 
-  const personLink = post.person
-    ? `/persons/${post.person.id}`
-    : null;
-
   const postUrl = getPostUrl(post);
-  const profileUrl = getProfileUrl(author);
   const router = useRouter();
   // Present only inside the client-pipeline timeline; null on production pages.
   const clientActions = useClientActions();
@@ -462,20 +444,20 @@ export function PostCard({ post }: { post: PostData }) {
         )}
         <div className="post-author-info">
           <span className="post-author-name">
-            {personLink ? (
-              <a href={personLink} className="post-person-link">
+            {avatarLink ? (
+              <a href={avatarLink} className="post-person-link" onClick={(e) => e.stopPropagation()}>
                 {post.person?.displayName || author?.displayName || author?.handle}
               </a>
             ) : (
-              author?.displayName || author?.handle
+              post.person?.displayName || author?.displayName || author?.handle
             )}
           </span>
           <span className="post-author-handle">
             <span className={`platform-badge ${post.platform}`}>
               {post.platform === "bluesky" ? "B" : "M"}
             </span>
-            {profileUrl ? (
-              <a href={profileUrl} target="_blank" rel="noopener noreferrer" className="post-handle-link">
+            {avatarLink ? (
+              <a href={avatarLink} className="post-handle-link" onClick={(e) => e.stopPropagation()}>
                 {author?.handle}
               </a>
             ) : (
