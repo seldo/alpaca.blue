@@ -149,6 +149,15 @@ async function compressImage(file: File): Promise<File> {
   });
 }
 
+// Prepares a picked file for upload. GIFs are left untouched so their animation
+// survives — compressImage redraws onto a canvas and re-encodes as JPEG, which
+// flattens an animated GIF to its first frame. Everything else is downscaled +
+// JPEG-compressed to fit Bluesky's blob limit.
+async function prepareForUpload(file: File): Promise<File> {
+  if (file.type === "image/gif") return file;
+  return compressImage(file);
+}
+
 export function CreatePost({ onClose, onPosted, replyTo, quoteOf }: CreatePostProps) {
   // Client-pipeline write clients, created lazily on first submit.
   const bskyRef = useRef<BlueskyClient | null>(null);
@@ -177,10 +186,10 @@ export function CreatePost({ onClose, onPosted, replyTo, quoteOf }: CreatePostPr
     const toAdd = imageFiles.slice(0, remaining);
     if (!toAdd.length) return;
 
-    const compressed = await Promise.all(toAdd.map(compressImage));
-    setImages((prev) => [...prev, ...compressed]);
-    setPreviews((prev) => [...prev, ...compressed.map((f) => URL.createObjectURL(f))]);
-    setAlts((prev) => [...prev, ...compressed.map(() => "")]);
+    const prepared = await Promise.all(toAdd.map(prepareForUpload));
+    setImages((prev) => [...prev, ...prepared]);
+    setPreviews((prev) => [...prev, ...prepared.map((f) => URL.createObjectURL(f))]);
+    setAlts((prev) => [...prev, ...prepared.map(() => "")]);
   }
 
   async function handleImageSelect(e: React.ChangeEvent<HTMLInputElement>) {
@@ -207,7 +216,14 @@ export function CreatePost({ onClose, onPosted, replyTo, quoteOf }: CreatePostPr
   async function uploadToBluesky(): Promise<{ image: unknown; alt: string }[]> {
     const bsky = bskyRef.current!;
     return Promise.all(
-      images.map(async (file, i) => ({ image: await bsky.uploadBlob(file), alt: alts[i] || "" })),
+      images.map(async (file, i) => {
+        // Bluesky's blob limit is 1MB. A GIF that fits is uploaded as-is; an
+        // oversized one falls back to a static first-frame JPEG so the Bluesky
+        // post still succeeds (Mastodon always gets the animated original).
+        const toUpload =
+          file.type === "image/gif" && file.size > MAX_BYTES ? await compressImage(file) : file;
+        return { image: await bsky.uploadBlob(toUpload), alt: alts[i] || "" };
+      }),
     );
   }
 
