@@ -135,11 +135,21 @@ async function createClient(): Promise<NodeOAuthClient> {
 export async function getNodeOAuthClient(): Promise<NodeOAuthClient> {
   if (_client) return _client;
   if (_clientInitPromise) return _clientInitPromise;
-  _clientInitPromise = createClient().then((client) => {
-    _client = client;
-    _clientInitPromise = null;
-    return client;
-  });
+  _clientInitPromise = createClient().then(
+    (client) => {
+      _client = client;
+      _clientInitPromise = null;
+      return client;
+    },
+    (err) => {
+      // Don't cache a rejected init. Otherwise one transient CIMD/network
+      // failure (or a misconfigured APP_URL) poisons the singleton: the
+      // rejected promise is returned to every later request until the process
+      // restarts. Clearing it lets the next request retry cleanly.
+      _clientInitPromise = null;
+      throw err;
+    },
+  );
   return _clientInitPromise;
 }
 
@@ -157,4 +167,65 @@ export async function getServerBlueskyAgent(userId: number): Promise<Agent | nul
     console.error("[bluesky-server] Failed to restore session for user", userId, err);
     return null;
   }
+}
+
+// ── Brokered credentials for the client ───────────────────────────────────
+// The browser fetches Bluesky directly (CORS-enabled XRPC) using a short-lived
+// access token + the DPoP key, signing its own proofs. We deliberately split
+// ownership: the server owns token *refresh* (rare, ~2h; serialized by the
+// distributed Redis lock above so concurrent requests can't double-spend
+// Bluesky's one-time-use refresh token), while the browser owns *reads*
+// (constant). The browser never touches the refresh token.
+
+export interface BrokeredBlueskyCredentials {
+  did: string;
+  pdsUrl: string; // tokenSet.aud — the user's PDS, where XRPC requests go
+  accessToken: string;
+  dpopPrivateJwk: Record<string, unknown>; // ES256 private JWK (has `d`)
+  expiresAt: string | null;
+}
+
+async function readRawSession(did: string): Promise<NodeSavedSession | undefined> {
+  const val = await redis
+    .get<NodeSavedSession>(`${KEY_PREFIX}bluesky:session:${did}`)
+    .catch(() => null);
+  return val ?? undefined;
+}
+
+// Returns the material the browser needs to call the PDS directly. Pass
+// `refresh: true` to force a token refresh (used by the refresh endpoint when
+// the browser hits a 401); otherwise restore() refreshes only if the token is
+// (about to be) expired.
+export async function getBrokeredBlueskyCredentials(
+  userId: number,
+  opts: { refresh?: boolean } = {},
+): Promise<BrokeredBlueskyCredentials | null> {
+  const [user] = await db
+    .select({ blueskyDid: users.blueskyDid })
+    .from(users)
+    .where(eq(users.id, userId))
+    .limit(1);
+  if (!user?.blueskyDid) return null;
+  const did = user.blueskyDid;
+
+  try {
+    const client = await getNodeOAuthClient();
+    // restore persists any refreshed tokenSet back to the Redis session store,
+    // so we read the (possibly updated) raw session immediately afterwards.
+    await client.restore(did, opts.refresh ? true : "auto");
+  } catch (err) {
+    console.error("[bluesky-server] broker restore failed for user", userId, err);
+    return null;
+  }
+
+  const session = await readRawSession(did);
+  if (!session?.tokenSet?.access_token) return null;
+
+  return {
+    did,
+    pdsUrl: session.tokenSet.aud,
+    accessToken: session.tokenSet.access_token,
+    dpopPrivateJwk: session.dpopJwk as unknown as Record<string, unknown>,
+    expiresAt: session.tokenSet.expires_at ?? null,
+  };
 }

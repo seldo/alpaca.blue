@@ -12,6 +12,7 @@
   "dependencies": {
     "@atproto/api": "^0.19.3",
     "@atproto/oauth-client-node": "^0.3.17",
+    "@noble/curves": "^2.2.0",
     "@upstash/redis": "^1.37.0",
     "dotenv": "^17.3.1",
     "drizzle-orm": "^0.45.1",

@@ -3,6 +3,8 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { Avatar } from "@/components/Avatar";
+import { useClientActions } from "@/lib/client/ClientActionsContext";
+import type { ClientPost } from "@/lib/client/types";
 
 function ImageModal({
   images,
@@ -256,6 +258,8 @@ export function PostCard({ post }: { post: PostData }) {
   const postUrl = getPostUrl(post);
   const profileUrl = getProfileUrl(author);
   const router = useRouter();
+  // Present only inside the client-pipeline timeline; null on production pages.
+  const clientActions = useClientActions();
   const [modalState, setModalState] = useState<{
     images: Array<{ url: string; alt: string }>;
     index: number;
@@ -281,6 +285,27 @@ export function PostCard({ post }: { post: PostData }) {
   function handleFavorite(e: React.MouseEvent) {
     e.stopPropagation();
     if (favoriting) return;
+
+    if (clientActions) {
+      // Client pipeline: write directly to the platform, no server route.
+      if (post.platform === "bluesky" && favorited) return; // no un-like (no stored like URI)
+      const nextFavorited = post.platform === "mastodon" ? !favorited : true;
+      const prevFavorited = favorited;
+      const prevCount = localLikeCount;
+      setFavorited(nextFavorited);
+      setLocalLikeCount((c) => c + (nextFavorited === prevFavorited ? 0 : nextFavorited ? 1 : -1));
+      setFavoriting(true);
+      clientActions
+        .like(post as unknown as ClientPost)
+        .then((r) => { setFavorited(r.viewerLiked); setLocalLikeCount(r.likeCount); })
+        .catch((err) => {
+          console.error("Favorite error:", err);
+          setFavorited(prevFavorited);
+          setLocalLikeCount(prevCount);
+        })
+        .finally(() => setFavoriting(false));
+      return;
+    }
 
     if (post.platform === "bluesky") {
       if (!post.platformPostCid) {
@@ -368,6 +393,33 @@ export function PostCard({ post }: { post: PostData }) {
     if (reposting) return;
 
     const isUndo = reposted;
+
+    if (clientActions) {
+      // Client pipeline: repost directly (with cross-platform fanout in actions).
+      if (post.platform === "bluesky") {
+        if (!post.platformPostCid) {
+          alert("Can't repost: this post is missing data needed to repost it.");
+          return;
+        }
+        if (isUndo) return; // can't undo Bluesky reposts
+      }
+      const prevReposted = reposted;
+      const prevCount = localRepostCount;
+      setReposting(true);
+      setReposted(!isUndo);
+      setLocalRepostCount((c) => c + (isUndo ? -1 : 1));
+      clientActions
+        .repost(post as unknown as ClientPost)
+        .then((r) => { setReposted(r.viewerReposted); setLocalRepostCount(r.repostCount); })
+        .catch((err) => {
+          console.error("Repost error:", err);
+          setReposted(prevReposted);
+          setLocalRepostCount(prevCount);
+          alert(err instanceof Error ? err.message : "Repost failed");
+        })
+        .finally(() => setReposting(false));
+      return;
+    }
 
     try {
       if (post.platform === "bluesky") {
@@ -511,6 +563,10 @@ export function PostCard({ post }: { post: PostData }) {
     ) return;
     if (post.id > 0) {
       router.push(`/posts/${post.id}`);
+    } else if (post.platformPostId) {
+      // Client pipeline post (no DB id): open the in-app detail keyed by
+      // "<platform>:<platformPostId>".
+      router.push(`/posts/${encodeURIComponent(`${post.platform}:${post.platformPostId}`)}`);
     } else if (post.postUrl) {
       window.open(post.postUrl, "_blank", "noopener,noreferrer");
     }
@@ -696,6 +752,14 @@ export function PostCard({ post }: { post: PostData }) {
           if (target.closest("a") || target.closest("button") || target.tagName === "IMG") return;
 
           if (!qp.uri) return;
+
+          // Client pipeline: open Bluesky quotes in-app via the URI-keyed
+          // detail. Mastodon quotes carry a URL (not a status id), so fall back
+          // to the server lookup which resolves + creates a row.
+          if (clientActions && qpPlatform === "bluesky" && qp.uri.startsWith("at://")) {
+            router.push(`/posts/${encodeURIComponent(`bluesky:${qp.uri}`)}`);
+            return;
+          }
 
           try {
             const res = await fetch("/api/posts/lookup", {

@@ -1,67 +1,49 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
+// Single identity view: header (handle/avatar/bio/banner) from
+// /api/graph/identities, live stats + follow state from the platform, and the
+// identity's posts fetched client-side with posts/replies/media/videos tabs and
+// cursor pagination. Follow/unfollow writes go directly to the platform.
+
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
 import { Avatar } from "@/components/Avatar";
 import { usePullToRefresh } from "@/lib/usePullToRefresh";
-
-interface IdentityStats {
-  followersCount: number | null;
-  followingCount: number | null;
-  postsCount: number | null;
-}
+import { BlueskyClient } from "@/lib/client/bluesky";
+import {
+  getMastodonCredentials,
+  fetchMastodonAuthorStatuses,
+  fetchMastodonAccountById,
+  fetchMastodonRelationship,
+  mastodonFollow,
+  type MastodonCredentials,
+} from "@/lib/client/mastodon";
+import { getIdentityMap, enrichAuthor } from "@/lib/client/identities";
+import { mergeTimeline } from "@/lib/client/dedup";
+import { likePost, repostPost } from "@/lib/client/actions";
+import { ClientActionsContext, type ClientActions } from "@/lib/client/ClientActionsContext";
+import { extractBlueskyFollowUri } from "@/lib/profile-meta";
+import type { ClientPost } from "@/lib/client/types";
 
 interface Identity {
   id: number;
+  personId: number | null;
   platform: string;
   handle: string;
+  did: string | null;
   displayName: string | null;
   avatarUrl: string | null;
-  profileUrl: string | null;
-  personId: number | null;
   bio: string | null;
-  bioHtml: string | null;
   bannerUrl: string | null;
-  stats: IdentityStats;
-  isFollowing: boolean;
+  profileUrl: string | null;
 }
 
-interface PostData {
-  id: number;
-  platform: string;
-  platformPostId: string;
-  platformPostCid?: string | null;
-  postUrl: string | null;
-  content: string | null;
-  contentHtml: string | null;
-  media: Array<{ type: string; url: string; alt: string }> | null;
-  replyToId: string | null;
-  repostOfId: string | null;
-  quotedPost: {
-    uri: string;
-    authorHandle: string;
-    authorDisplayName?: string;
-    authorAvatar?: string;
-    text: string;
-    media?: Array<{ type: string; url: string; alt: string }>;
-    postedAt?: string;
-  } | null;
-  likeCount: number | null;
-  repostCount: number | null;
-  replyCount: number | null;
-  postedAt: string;
-  author: {
-    id: number;
-    handle: string;
-    displayName: string | null;
-    avatarUrl: string | null;
-    platform: string;
-    profileUrl: string | null;
-  } | null;
-  person: { id: number; displayName: string | null } | null;
-  alsoPostedOn: Array<{ platform: string; postUrl: string | null; platformPostId: string; platformPostCid: string | null; threadRootId: string | null; threadRootCid: string | null }>;
+interface Stats {
+  followers: number | null;
+  following: number | null;
+  posts: number | null;
 }
 
 type Tab = "posts" | "replies" | "media" | "videos";
@@ -72,158 +54,184 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "videos", label: "Videos" },
 ];
 
+function findIdentity(data: { persons?: { identities?: Identity[] }[]; unlinked?: Identity[] }, id: number): Identity | null {
+  const all: Identity[] = [
+    ...(data.persons || []).flatMap((p) => p.identities || []),
+    ...(data.unlinked || []),
+  ];
+  return all.find((i) => i.id === id) ?? null;
+}
+
+// Tabs filter the author feed; some filtering is server-side, some client-side.
+function applyTabFilter(posts: ClientPost[], tab: Tab): ClientPost[] {
+  if (tab === "replies") return posts.filter((p) => p.replyToId);
+  if (tab === "videos") return posts.filter((p) => p.media?.some((m) => m.type === "video" || m.type === "gifv"));
+  return posts;
+}
+
 export default function IdentityPage() {
   const params = useParams();
   const router = useRouter();
   const identityId = params.id as string;
 
   const [identity, setIdentity] = useState<Identity | null>(null);
-  const [posts, setPosts] = useState<PostData[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [stats, setStats] = useState<Stats | null>(null);
+  const [isFollowing, setIsFollowing] = useState(false);
+  const [followBusy, setFollowBusy] = useState(false);
   const [tab, setTab] = useState<Tab>("posts");
+  const [posts, setPosts] = useState<ClientPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetching, setFetching] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const [followBusy, setFollowBusy] = useState(false);
-  const isFetchingRef = useRef(false);
-  const pendingScrollRestore = useRef<number | null>(null);
+  const [hasMore, setHasMore] = useState(false);
 
-  const cacheKey = `identity_cache_${identityId}_${tab}`;
-  const scrollKey = `identity_scroll_${identityId}_${tab}`;
+  const bluesky = useRef<BlueskyClient | null>(null);
+  const masto = useRef<MastodonCredentials | null>(null);
+  const ready = useRef(false);
+  const identityRef = useRef<Identity | null>(null);
+  const followUriRef = useRef<string | null>(null); // Bluesky follow record uri
+  const accPosts = useRef<ClientPost[]>([]); // accumulated for current tab
+  const cursor = useRef<string | null>(null);
+  const inFlight = useRef(false);
 
-  const fetchData = useCallback(async (selectedTab: Tab) => {
-    if (isFetchingRef.current) return;
-    isFetchingRef.current = true;
+  const ensureClients = useCallback(async () => {
+    if (ready.current) return;
+    masto.current = await getMastodonCredentials();
+    bluesky.current = await BlueskyClient.create();
+    ready.current = true;
+  }, []);
+
+  // Live profile → stats, banner, follow state.
+  const loadProfile = useCallback(async (ident: Identity) => {
+    if (ident.platform === "bluesky" && bluesky.current && ident.did) {
+      const p = await bluesky.current.getProfile(ident.did);
+      setStats({
+        followers: (p.followersCount as number) ?? null,
+        following: (p.followsCount as number) ?? null,
+        posts: (p.postsCount as number) ?? null,
+      });
+      const followUri = extractBlueskyFollowUri(p);
+      followUriRef.current = followUri;
+      setIsFollowing(!!followUri);
+    } else if (ident.platform === "mastodon" && masto.current && ident.did) {
+      const [acct, following] = await Promise.all([
+        fetchMastodonAccountById(masto.current, ident.did),
+        fetchMastodonRelationship(masto.current, ident.did),
+      ]);
+      if (acct) {
+        setStats({
+          followers: (acct.followers_count as number) ?? null,
+          following: (acct.following_count as number) ?? null,
+          posts: (acct.statuses_count as number) ?? null,
+        });
+      }
+      setIsFollowing(!!following);
+    }
+  }, []);
+
+  // Fetches a page of the current tab and re-renders. reset clears accumulators.
+  const fetchTabPage = useCallback(async (ident: Identity, t: Tab, reset: boolean) => {
+    if (reset) { accPosts.current = []; cursor.current = null; }
+    if (!reset && cursor.current === null) return; // exhausted
+
+    let page: { posts: ClientPost[]; cursor: string | null } = { posts: [], cursor: null };
+    if (ident.platform === "bluesky" && bluesky.current) {
+      const filter =
+        t === "posts" ? "posts_no_replies" :
+        t === "replies" ? "posts_with_replies" : "posts_with_media";
+      page = await bluesky.current.getAuthorFeed(ident.did || ident.handle, {
+        filter,
+        cursor: cursor.current ?? undefined,
+      });
+    } else if (ident.platform === "mastodon" && masto.current && ident.did) {
+      page = await fetchMastodonAuthorStatuses(masto.current, ident.did, {
+        maxId: cursor.current ?? undefined,
+        excludeReplies: t === "posts",
+        onlyMedia: t === "media" || t === "videos",
+      });
+    }
+
+    cursor.current = page.cursor;
+    accPosts.current.push(...applyTabFilter(page.posts, t));
+    const map = await getIdentityMap();
+    const all = [...accPosts.current];
+    for (const p of all) enrichAuthor(p, map);
+    all.sort((a, b) => b.postedAt.localeCompare(a.postedAt));
+    setPosts(mergeTimeline(all));
+    setHasMore(page.cursor !== null);
+  }, []);
+
+  const load = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setFetching(true);
-
     try {
-      const res = await fetch(`/api/identities/${identityId}/posts?limit=50&tab=${selectedTab}`);
-      if (!res.ok) throw new Error("Failed to fetch");
-      const data = await res.json();
-      setIdentity(data.identity);
-      setPosts(data.posts || []);
-      setNextCursor(data.nextCursor);
+      await ensureClients();
+      const identRes = await fetch("/api/graph/identities");
+      const ident = findIdentity(await identRes.json(), parseInt(identityId));
+      setIdentity(ident);
+      identityRef.current = ident;
+      if (!ident) return;
+      await Promise.all([loadProfile(ident), fetchTabPage(ident, tab, true)]);
     } catch (err) {
       console.error("Failed to load identity:", err);
     } finally {
       setFetching(false);
       setLoading(false);
-      isFetchingRef.current = false;
+      inFlight.current = false;
     }
-  }, [identityId]);
+  }, [identityId, ensureClients, loadProfile, fetchTabPage, tab]);
 
-  // Persist state in sessionStorage so back-nav restores instantly. We only
-  // save when posts is non-empty: switching tabs clears `posts` to [] and
-  // would otherwise trample the destination tab's cached data before the
-  // load effect can read it.
-  useEffect(() => {
-    if (identity && posts.length > 0) {
-      sessionStorage.setItem(cacheKey, JSON.stringify({ identity, posts, nextCursor }));
-    }
-  }, [identity, posts, nextCursor, cacheKey]);
+  useEffect(() => { load(); }, [load]);
 
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-    function handleScroll() {
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        sessionStorage.setItem(scrollKey, String(window.scrollY));
-      }, 100);
-    }
-    window.addEventListener("scroll", handleScroll, { passive: true });
-    return () => {
-      clearTimeout(timer);
-      window.removeEventListener("scroll", handleScroll);
-    };
-  }, [scrollKey]);
-
-  // On mount or tab change: hydrate from cache if we have one, otherwise fetch.
-  // Requires non-empty posts — an old cache with `identity` but no posts (from
-  // a prior buggy save) would otherwise short-circuit and never refetch.
-  useEffect(() => {
-    const cached = sessionStorage.getItem(cacheKey);
-    if (cached) {
-      try {
-        const { identity: i, posts: p, nextCursor: c } = JSON.parse(cached);
-        if (i && Array.isArray(p) && p.length > 0) {
-          setIdentity(i);
-          setPosts(p);
-          setNextCursor(c);
-          setLoading(false);
-          const savedScroll = sessionStorage.getItem(scrollKey);
-          if (savedScroll) pendingScrollRestore.current = parseInt(savedScroll);
-          return;
-        }
-      } catch {
-        // fall through
-      }
-    }
-    setLoading(true);
-    fetchData(tab);
-  }, [fetchData, cacheKey, scrollKey, tab]);
-
-  useLayoutEffect(() => {
-    if (pendingScrollRestore.current !== null && posts.length > 0) {
-      window.scrollTo(0, pendingScrollRestore.current);
-      pendingScrollRestore.current = null;
-    }
-  }, [posts]);
-
-  const refresh = useCallback(() => {
-    sessionStorage.removeItem(cacheKey);
-    sessionStorage.removeItem(scrollKey);
-    return fetchData(tab);
-  }, [fetchData, tab, cacheKey, scrollKey]);
-
-  const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refresh, fetching);
+  async function switchTab(t: Tab) {
+    if (t === tab || !identityRef.current) return;
+    setTab(t);
+    setPosts([]);
+    await fetchTabPage(identityRef.current, t, true);
+  }
 
   async function loadMore() {
-    if (!nextCursor || loadingMore) return;
+    if (loadingMore || !hasMore || !identityRef.current) return;
     setLoadingMore(true);
     try {
-      const res = await fetch(`/api/identities/${identityId}/posts?limit=50&tab=${tab}&cursor=${nextCursor}`);
-      const data = await res.json();
-      setPosts((prev) => [...prev, ...data.posts]);
-      setNextCursor(data.nextCursor);
-    } catch (err) {
-      console.error("Load more error:", err);
+      await fetchTabPage(identityRef.current, tab, false);
     } finally {
       setLoadingMore(false);
     }
   }
 
-  function selectTab(next: Tab) {
-    if (next === tab) return;
-    setTab(next);
-    setPosts([]);
-    setNextCursor(null);
-  }
-
   async function toggleFollow() {
-    if (!identity || followBusy) return;
+    const ident = identityRef.current;
+    if (!ident || followBusy) return;
+    const next = !isFollowing;
     setFollowBusy(true);
-    const wasFollowing = identity.isFollowing;
-    // Optimistic UI
-    setIdentity({ ...identity, isFollowing: !wasFollowing });
+    setIsFollowing(next); // optimistic
     try {
-      const res = await fetch(`/api/identities/${identityId}/follow`, {
-        method: wasFollowing ? "DELETE" : "POST",
-      });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        throw new Error(data.error || "Follow failed");
+      if (ident.platform === "bluesky" && bluesky.current && ident.did) {
+        if (next) {
+          followUriRef.current = (await bluesky.current.follow(ident.did)).uri;
+        } else if (followUriRef.current) {
+          await bluesky.current.deleteRecord(followUriRef.current);
+          followUriRef.current = null;
+        }
+      } else if (ident.platform === "mastodon" && masto.current && ident.did) {
+        await mastodonFollow(masto.current, ident.did, !next);
       }
     } catch (err) {
-      // Roll back on failure
-      setIdentity({ ...identity, isFollowing: wasFollowing });
-      const message = err instanceof Error ? err.message : "Follow failed";
-      alert(message);
+      console.error("Follow toggle failed:", err);
+      setIsFollowing(!next); // rollback
     } finally {
       setFollowBusy(false);
     }
   }
 
-  const displayName = identity?.displayName || identity?.handle || "Profile";
+  const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(load, fetching);
+
+  const actions: ClientActions = {
+    like: (post) => likePost(post, { bluesky: bluesky.current, mastodon: masto.current }),
+    repost: (post) => repostPost(post, { bluesky: bluesky.current, mastodon: masto.current }),
+  };
 
   return (
     <AppLayout>
@@ -241,139 +249,92 @@ export default function IdentityPage() {
         </div>
       )}
 
-      {loading && (
-        <div className="spinner-container">
-          <div className="spinner" />
-        </div>
-      )}
+      {loading && <div className="spinner-container"><div className="spinner" /></div>}
+
+      {!loading && !identity && <p className="text-muted">Identity not found.</p>}
 
       {!loading && identity && (
         <>
-          <div className="profile-hero">
-            <div className="profile-hero-banner-wrap">
-              {identity.bannerUrl ? (
-                <div className="profile-hero-banner" style={{ backgroundImage: `url(${identity.bannerUrl})` }} />
-              ) : (
-                <div className="profile-hero-banner profile-hero-banner-empty" />
+          <section className="section">
+            <div className="person-identity-card">
+              {identity.bannerUrl && (
+                <div className="person-identity-banner" style={{ backgroundImage: `url(${identity.bannerUrl})` }} />
               )}
-              <div className="profile-hero-actions">
-                <button
-                  className={`btn ${identity.isFollowing ? "btn-outline" : "btn-primary"} profile-follow-btn`}
-                  onClick={toggleFollow}
-                  disabled={followBusy}
-                >
-                  {identity.isFollowing ? "Following" : "Follow"}
-                </button>
-              </div>
-              <div className="profile-hero-avatar">
+              <div className="person-identity-row">
                 {identity.avatarUrl && (
-                  <Avatar identityId={identity.id} src={identity.avatarUrl} className="profile-hero-avatar-img" />
+                  <Avatar identityId={identity.id} src={identity.avatarUrl} className="person-identity-avatar" />
                 )}
-              </div>
-            </div>
-            <div className="profile-hero-body">
-              <h1 className="profile-hero-displayname">{displayName}</h1>
-              <div className="profile-hero-handle">
                 <span className={`platform-badge ${identity.platform}`}>
                   {identity.platform === "bluesky" ? "B" : "M"}
                 </span>
-                {(() => {
-                  // Mastodon handles are stored with a leading @; strip so
-                  // the rendered "@" doesn't double up.
-                  const handle = identity.handle.replace(/^@/, "");
-                  return identity.profileUrl ? (
-                    <a href={identity.profileUrl} target="_blank" rel="noopener noreferrer" className="profile-hero-handle-link">
-                      @{handle}
-                    </a>
-                  ) : (
-                    <span>@{handle}</span>
-                  );
-                })()}
+                <span className="person-identity-handle">
+                  {identity.profileUrl ? (
+                    <a href={identity.profileUrl} target="_blank" rel="noopener noreferrer">{identity.handle}</a>
+                  ) : identity.handle}
+                </span>
+                <button
+                  className={`btn ${isFollowing ? "btn-outline" : "btn-primary"}`}
+                  onClick={toggleFollow}
+                  disabled={followBusy}
+                  style={{ marginLeft: "auto" }}
+                >
+                  {isFollowing ? "Following" : "Follow"}
+                </button>
               </div>
 
-              <ProfileStats stats={identity.stats} />
+              {stats && (
+                <div className="text-muted" style={{ display: "flex", gap: 16, fontSize: "0.85em", padding: "4px 0" }}>
+                  {stats.posts != null && <span><strong>{stats.posts}</strong> posts</span>}
+                  {stats.following != null && <span><strong>{stats.following}</strong> following</span>}
+                  {stats.followers != null && <span><strong>{stats.followers}</strong> followers</span>}
+                </div>
+              )}
 
-              {identity.bioHtml && (
-                <div className="profile-hero-bio" dangerouslySetInnerHTML={{ __html: identity.bioHtml }} />
+              {identity.bio && (
+                identity.platform === "mastodon" ? (
+                  <div className="person-identity-bio" dangerouslySetInnerHTML={{ __html: identity.bio }} />
+                ) : (
+                  <p className="person-identity-bio person-identity-bio-text">{identity.bio}</p>
+                )
               )}
 
               {identity.personId && (
-                <a href={`/persons/${identity.personId}`} className="profile-hero-merged-link">
-                  View merged profile →
-                </a>
+                <a href={`/persons/${identity.personId}`} className="post-person-link">View person</a>
               )}
             </div>
-          </div>
+          </section>
 
-          <nav className="profile-tabs" role="tablist" aria-label="Posts filter">
+          <div className="identity-tabs" style={{ display: "flex", gap: 8, padding: "0 0 8px" }}>
             {TABS.map((t) => (
               <button
                 key={t.key}
-                role="tab"
-                aria-selected={tab === t.key}
-                className={`profile-tab${tab === t.key ? " profile-tab-active" : ""}`}
-                onClick={() => selectTab(t.key)}
+                className={`btn ${tab === t.key ? "btn-primary" : "btn-outline"}`}
+                onClick={() => switchTab(t.key)}
               >
                 {t.label}
               </button>
             ))}
-          </nav>
+          </div>
 
           <section className="section">
-            {fetching && posts.length === 0 && (
-              <div className="spinner-container"><div className="spinner" /></div>
-            )}
-
-            {!fetching && posts.length === 0 && (
-              <p className="text-muted" style={{ textAlign: "center", padding: "32px 0" }}>
-                Nothing to show.
-              </p>
-            )}
-
-            <div className="timeline-feed">
-              {posts.map((post) => (
-                <PostCard key={`${post.platform}-${post.id}`} post={post} />
-              ))}
-
-              {nextCursor && (
-                <div className="load-more">
-                  <button
-                    onClick={loadMore}
-                    disabled={loadingMore}
-                    className="btn btn-outline load-more-btn"
-                  >
-                    {loadingMore ? "Loading..." : "Load more"}
-                  </button>
-                </div>
-              )}
-            </div>
+            {posts.length === 0 && <p className="text-muted">No posts found.</p>}
+            <ClientActionsContext.Provider value={actions}>
+              <div className="timeline-feed">
+                {posts.map((post) => (
+                  <PostCard key={`${post.platform}-${post.platformPostId}`} post={post} />
+                ))}
+                {hasMore && (
+                  <div className="load-more">
+                    <button onClick={loadMore} disabled={loadingMore} className="btn btn-outline load-more-btn">
+                      {loadingMore ? "Loading..." : "Load more"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </ClientActionsContext.Provider>
           </section>
         </>
       )}
     </AppLayout>
   );
-}
-
-function ProfileStats({ stats }: { stats: IdentityStats }) {
-  const items: Array<{ value: number | null; label: string }> = [
-    { value: stats.followersCount, label: "followers" },
-    { value: stats.followingCount, label: "following" },
-    { value: stats.postsCount, label: "posts" },
-  ];
-  if (items.every((i) => i.value === null)) return null;
-  return (
-    <div className="profile-hero-stats">
-      {items.map((i) => i.value === null ? null : (
-        <span key={i.label} className="profile-hero-stat">
-          <strong>{formatStat(i.value)}</strong> <span className="text-muted">{i.label}</span>
-        </span>
-      ))}
-    </div>
-  );
-}
-
-function formatStat(n: number): string {
-  if (n >= 1000000) return `${(n / 1000000).toFixed(1)}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}K`.replace(".0K", "K");
-  return n.toString();
 }

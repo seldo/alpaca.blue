@@ -140,6 +140,52 @@ async function uploadThumb(agent: Agent, imageUrl: string): Promise<BlobRef | un
   }
 }
 
+// Client-pipeline variant: returns the OG metadata plus the raw thumb bytes
+// (base64) instead of uploading a Bluesky blob. The browser fetches this (the
+// URL fetch is CORS-bound, so it must happen server-side), then uploads the
+// thumb itself via its own DPoP creds and assembles the external embed.
+export interface LinkCardMetadata {
+  url: string;
+  title: string;
+  description: string;
+  thumb?: { base64: string; mimeType: string };
+}
+
+async function fetchThumbBytes(
+  imageUrl: string,
+): Promise<{ base64: string; mimeType: string } | undefined> {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
+    const res = await fetch(imageUrl, {
+      signal: controller.signal,
+      headers: { "User-Agent": USER_AGENT },
+      redirect: "follow",
+    });
+    clearTimeout(timeout);
+    if (!res.ok) return undefined;
+    const buf = Buffer.from(await res.arrayBuffer());
+    if (buf.length === 0 || buf.length > MAX_THUMB_BYTES) return undefined;
+    const mimeType = (res.headers.get("content-type") || "image/jpeg").split(";")[0].trim();
+    if (!mimeType.startsWith("image/")) return undefined;
+    return { base64: buf.toString("base64"), mimeType };
+  } catch {
+    return undefined;
+  }
+}
+
+export async function fetchLinkCardMetadata(url: string): Promise<LinkCardMetadata | null> {
+  const og = await fetchOgMetadata(url);
+  if (!og) return null;
+  const thumb = og.image ? await fetchThumbBytes(og.image) : undefined;
+  return {
+    url: og.finalUrl,
+    title: og.title,
+    description: og.description,
+    ...(thumb ? { thumb } : {}),
+  };
+}
+
 export async function buildBlueskyLinkCard(agent: Agent, url: string): Promise<BlueskyLinkCard | null> {
   const og = await fetchOgMetadata(url);
   if (!og) return null;
