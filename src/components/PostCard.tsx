@@ -284,71 +284,24 @@ export function PostCard({ post }: { post: PostData }) {
 
   function handleFavorite(e: React.MouseEvent) {
     e.stopPropagation();
-    if (favoriting) return;
+    if (favoriting || !clientActions) return;
+    if (post.platform === "bluesky" && favorited) return; // no un-like (no stored like URI)
 
-    if (clientActions) {
-      // Client pipeline: write directly to the platform, no server route.
-      if (post.platform === "bluesky" && favorited) return; // no un-like (no stored like URI)
-      const nextFavorited = post.platform === "mastodon" ? !favorited : true;
-      const prevFavorited = favorited;
-      const prevCount = localLikeCount;
-      setFavorited(nextFavorited);
-      setLocalLikeCount((c) => c + (nextFavorited === prevFavorited ? 0 : nextFavorited ? 1 : -1));
-      setFavoriting(true);
-      clientActions
-        .like(post as unknown as ClientPost)
-        .then((r) => { setFavorited(r.viewerLiked); setLocalLikeCount(r.likeCount); })
-        .catch((err) => {
-          console.error("Favorite error:", err);
-          setFavorited(prevFavorited);
-          setLocalLikeCount(prevCount);
-        })
-        .finally(() => setFavoriting(false));
-      return;
-    }
-
-    if (post.platform === "bluesky") {
-      if (!post.platformPostCid) {
-        console.warn("Cannot favorite: missing CID");
-        return;
-      }
-      if (favorited) return; // Can't unfavorite without stored like URI
-      setFavorited(true);
-      setLocalLikeCount((c) => c + 1);
-      setFavoriting(true);
-      fetch("/api/bluesky/like", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ uri: post.platformPostId, cid: post.platformPostCid }),
-      }).catch((err) => {
+    const nextFavorited = post.platform === "mastodon" ? !favorited : true;
+    const prevFavorited = favorited;
+    const prevCount = localLikeCount;
+    setFavorited(nextFavorited);
+    setLocalLikeCount((c) => c + (nextFavorited === prevFavorited ? 0 : nextFavorited ? 1 : -1));
+    setFavoriting(true);
+    clientActions
+      .like(post as unknown as ClientPost)
+      .then((r) => { setFavorited(r.viewerLiked); setLocalLikeCount(r.likeCount); })
+      .catch((err) => {
         console.error("Favorite error:", err);
-        setFavorited(false);
-        setLocalLikeCount((c) => c - 1);
-      }).finally(() => setFavoriting(false));
-    } else if (post.platform === "mastodon") {
-      const nextFavorited = !favorited;
-      const delta = nextFavorited ? 1 : -1;
-      // Optimistic update
-      setFavorited(nextFavorited);
-      setLocalLikeCount((c) => c + delta);
-      setFavoriting(true);
-      fetch(`/api/posts/${post.id}/favorite`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ unfavorite: favorited }),
-      }).then((res) => {
-        if (res.ok) return res.json();
-        throw new Error("Favorite failed");
-      }).then((data) => {
-        setFavorited(data.favorited);
-        setLocalLikeCount(data.likeCount);
-      }).catch((err) => {
-        console.error("Favorite error:", err);
-        // Roll back
-        setFavorited(favorited);
-        setLocalLikeCount((c) => c - delta);
-      }).finally(() => setFavoriting(false));
-    }
+        setFavorited(prevFavorited);
+        setLocalLikeCount(prevCount);
+      })
+      .finally(() => setFavoriting(false));
   }
 
   function handleReplyToggle(e: React.MouseEvent) {
@@ -387,123 +340,34 @@ export function PostCard({ post }: { post: PostData }) {
     setRepostMenuOpen(!repostMenuOpen);
   }
 
-  async function handleRepost(e: React.MouseEvent) {
+  function handleRepost(e: React.MouseEvent) {
     e.stopPropagation();
     setRepostMenuOpen(false);
-    if (reposting) return;
+    if (reposting || !clientActions) return;
 
     const isUndo = reposted;
-
-    if (clientActions) {
-      // Client pipeline: repost directly (with cross-platform fanout in actions).
-      if (post.platform === "bluesky") {
-        if (!post.platformPostCid) {
-          alert("Can't repost: this post is missing data needed to repost it.");
-          return;
-        }
-        if (isUndo) return; // can't undo Bluesky reposts
+    if (post.platform === "bluesky") {
+      if (!post.platformPostCid) {
+        alert("Can't repost: this post is missing data needed to repost it.");
+        return;
       }
-      const prevReposted = reposted;
-      const prevCount = localRepostCount;
-      setReposting(true);
-      setReposted(!isUndo);
-      setLocalRepostCount((c) => c + (isUndo ? -1 : 1));
-      clientActions
-        .repost(post as unknown as ClientPost)
-        .then((r) => { setReposted(r.viewerReposted); setLocalRepostCount(r.repostCount); })
-        .catch((err) => {
-          console.error("Repost error:", err);
-          setReposted(prevReposted);
-          setLocalRepostCount(prevCount);
-          alert(err instanceof Error ? err.message : "Repost failed");
-        })
-        .finally(() => setReposting(false));
-      return;
+      if (isUndo) return; // can't undo Bluesky reposts
     }
-
-    try {
-      if (post.platform === "bluesky") {
-        if (!post.platformPostCid) {
-          alert("Can't repost: this post is missing data needed to repost it.");
-          return;
-        }
-        if (isUndo) return; // Can't undo Bluesky reposts without stored URI
-        setReposting(true);
-        const res = await fetch("/api/bluesky/repost", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ uri: post.platformPostId, cid: post.platformPostCid }),
-        });
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || `Repost failed (${res.status})`);
-        }
-        setReposted(true);
-        setLocalRepostCount((c) => c + 1);
-      } else if (post.platform === "mastodon") {
-        setReposting(true);
-        const res = await fetch(`/api/posts/${post.id}/repost`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ undo: isUndo }),
-        });
-        if (!res.ok) {
-          const data = await res.json().catch(() => ({}));
-          throw new Error(data.error || `Repost failed (${res.status})`);
-        }
-        const data = await res.json();
-        setReposted(data.reblogged);
-        setLocalRepostCount(data.repostCount);
-      }
-
-      // Cross-platform fanout — only on initial repost, not undo. If the
-      // post has a mirror on the other platform, native-repost the mirror;
-      // otherwise post the original's URL as a status via cross-post-mirror,
-      // which also records the link so the bare URL post gets folded back
-      // into the original on the timeline. Reached only when the primary
-      // repost above succeeded.
-      if (!isUndo && post.postUrl) {
-        const otherPlatform = post.platform === "bluesky" ? "mastodon" : "bluesky";
-        const mirror = post.alsoPostedOn?.find((p) => p.platform === otherPlatform);
-
-        if (otherPlatform === "bluesky") {
-          if (mirror?.platformPostCid) {
-            await fetch("/api/bluesky/repost", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ uri: mirror.platformPostId, cid: mirror.platformPostCid }),
-            }).catch(() => {});
-          } else {
-            await fetch("/api/posts/cross-post-mirror", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ originalPostId: post.id, targetPlatform: "bluesky" }),
-            }).catch(() => {});
-          }
-        } else {
-          // otherPlatform === "mastodon"
-          if (mirror) {
-            await fetch("/api/mastodon/repost", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ statusId: mirror.platformPostId }),
-            }).catch(() => {});
-          } else {
-            await fetch("/api/posts/cross-post-mirror", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ originalPostId: post.id, targetPlatform: "mastodon" }),
-            }).catch(() => {});
-          }
-        }
-      }
-    } catch (err) {
-      console.error("Repost error:", err);
-      const message = err instanceof Error ? err.message : "Repost failed";
-      alert(message);
-    } finally {
-      setReposting(false);
-    }
+    const prevReposted = reposted;
+    const prevCount = localRepostCount;
+    setReposting(true);
+    setReposted(!isUndo);
+    setLocalRepostCount((c) => c + (isUndo ? -1 : 1));
+    clientActions
+      .repost(post as unknown as ClientPost)
+      .then((r) => { setReposted(r.viewerReposted); setLocalRepostCount(r.repostCount); })
+      .catch((err) => {
+        console.error("Repost error:", err);
+        setReposted(prevReposted);
+        setLocalRepostCount(prevCount);
+        alert(err instanceof Error ? err.message : "Repost failed");
+      })
+      .finally(() => setReposting(false));
   }
 
   function handleQuoteOpen(e: React.MouseEvent) {
@@ -746,45 +610,19 @@ export function PostCard({ post }: { post: PostData }) {
         // @ so the rendered "@" prefix doesn't double up.
         const qpHandleDisplay = qp.authorHandle.replace(/^@/, "");
 
-        async function handleQuotedPostClick(e: React.MouseEvent) {
+        function handleQuotedPostClick(e: React.MouseEvent) {
           e.stopPropagation();
           const target = e.target as HTMLElement;
           if (target.closest("a") || target.closest("button") || target.tagName === "IMG") return;
-
           if (!qp.uri) return;
 
-          // Client pipeline: open Bluesky quotes in-app via the URI-keyed
-          // detail. Mastodon quotes carry a URL (not a status id), so fall back
-          // to the server lookup which resolves + creates a row.
-          if (clientActions && qpPlatform === "bluesky" && qp.uri.startsWith("at://")) {
+          // Bluesky quotes have an AT URI → open the in-app thread. Mastodon
+          // quotes carry only a URL (no status id we can key on) → open on the
+          // platform.
+          if (qpPlatform === "bluesky" && qp.uri.startsWith("at://")) {
             router.push(`/posts/${encodeURIComponent(`bluesky:${qp.uri}`)}`);
-            return;
-          }
-
-          try {
-            const res = await fetch("/api/posts/lookup", {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                uri: qp.uri,
-                platform: qpPlatform,
-                postUrl: qp.postUrl,
-                authorHandle: qp.authorHandle,
-                authorDisplayName: qp.authorDisplayName,
-                authorAvatar: qp.authorAvatar,
-                text: qp.text,
-                contentHtml: qp.contentHtml,
-                media: qp.media,
-                postedAt: qp.postedAt,
-              }),
-            });
-            const data = await res.json();
-            if (data.id) {
-              router.push(`/posts/${data.id}`);
-            }
-          } catch {
-            // If lookup fails, open on platform as fallback
-            if (qpUrl) window.open(qpUrl, "_blank");
+          } else if (qpUrl) {
+            window.open(qpUrl, "_blank", "noopener,noreferrer");
           }
         }
 

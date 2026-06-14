@@ -43,9 +43,6 @@ interface CreatePostProps {
   onPosted?: () => void;
   replyTo?: ReplyTarget;
   quoteOf?: QuoteTarget;
-  // When true, all writes go directly browser → platform (the client pipeline)
-  // instead of through the server routes. Set on the /timeline-client surface.
-  clientMode?: boolean;
 }
 
 interface ResolvedReplyTargets {
@@ -152,8 +149,8 @@ async function compressImage(file: File): Promise<File> {
   });
 }
 
-export function CreatePost({ onClose, onPosted, replyTo, quoteOf, clientMode }: CreatePostProps) {
-  // Client-pipeline write clients, created lazily on first submit in clientMode.
+export function CreatePost({ onClose, onPosted, replyTo, quoteOf }: CreatePostProps) {
+  // Client-pipeline write clients, created lazily on first submit.
   const bskyRef = useRef<BlueskyClient | null>(null);
   const mastoRef = useRef<MastodonCredentials | null>(null);
   const [text, setText] = useState("");
@@ -208,43 +205,15 @@ export function CreatePost({ onClose, onPosted, replyTo, quoteOf, clientMode }: 
   }
 
   async function uploadToBluesky(): Promise<{ image: unknown; alt: string }[]> {
-    if (clientMode) {
-      const bsky = bskyRef.current!;
-      return Promise.all(
-        images.map(async (file, i) => ({ image: await bsky.uploadBlob(file), alt: alts[i] || "" })),
-      );
-    }
+    const bsky = bskyRef.current!;
     return Promise.all(
-      images.map(async (file, i) => {
-        const formData = new FormData();
-        formData.append("file", file);
-        const res = await fetch("/api/bluesky/upload-blob", { method: "POST", body: formData });
-        if (!res.ok) throw new Error("Bluesky media upload failed");
-        const data = await res.json();
-        return { image: data.blob, alt: alts[i] || "" };
-      })
+      images.map(async (file, i) => ({ image: await bsky.uploadBlob(file), alt: alts[i] || "" })),
     );
   }
 
   async function uploadToMastodon(): Promise<string[]> {
-    if (clientMode) {
-      const creds = mastoRef.current!;
-      return Promise.all(images.map((file, i) => mastodonUploadMedia(creds, file, alts[i] || "")));
-    }
-    return Promise.all(
-      images.map(async (file, i) => {
-        const formData = new FormData();
-        formData.append("file", file);
-        if (alts[i]) formData.append("description", alts[i]);
-        const res = await fetch("/api/posts/upload-media", {
-          method: "POST",
-          body: formData,
-        });
-        if (!res.ok) throw new Error("Mastodon media upload failed");
-        const data = await res.json();
-        return data.id as string;
-      })
-    );
+    const creds = mastoRef.current!;
+    return Promise.all(images.map((file, i) => mastodonUploadMedia(creds, file, alts[i] || "")));
   }
 
   // Resolve which platform-specific posts we're replying to (if any). The
@@ -258,12 +227,10 @@ export function CreatePost({ onClose, onPosted, replyTo, quoteOf, clientMode }: 
     setPosting(true);
     setError(null);
 
-    if (clientMode) {
-      // Resolve the write clients once. Bluesky is always present (it's the
-      // login); Mastodon only if connected.
-      if (!bskyRef.current) bskyRef.current = await BlueskyClient.create();
-      if (!mastoRef.current) mastoRef.current = await getMastodonCredentials();
-    }
+    // Resolve the write clients once. Bluesky is always present (it's the
+    // login); Mastodon only if connected.
+    if (!bskyRef.current) bskyRef.current = await BlueskyClient.create();
+    if (!mastoRef.current) mastoRef.current = await getMastodonCredentials();
 
     const content = text.trim();
     const results: string[] = [];
@@ -300,29 +267,17 @@ export function CreatePost({ onClose, onPosted, replyTo, quoteOf, clientMode }: 
       body.text = textBody;
       if (hasImages) body.images = blueskyImages;
 
-      if (clientMode) {
-        try {
-          await bskyRef.current!.post(body as unknown as Parameters<BlueskyClient["post"]>[0]);
-          return true;
-        } catch (err) {
-          console.error("Bluesky post error:", err);
-          return false;
-        }
+      try {
+        await bskyRef.current!.post(body as unknown as Parameters<BlueskyClient["post"]>[0]);
+        return true;
+      } catch (err) {
+        console.error("Bluesky post error:", err);
+        return false;
       }
-
-      const res = await fetch("/api/bluesky/post", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      return res.ok;
     }
 
     async function postToMastodon(mediaIds?: string[]): Promise<boolean> {
-      const body: Record<string, unknown> = {};
       let textBody = content;
-
-      if (mastoReplyTarget) body.inReplyToId = mastoReplyTarget.statusId;
 
       if (isQuote) {
         // Mastodon has no native quote — always append the URL.
@@ -333,45 +288,33 @@ export function CreatePost({ onClose, onPosted, replyTo, quoteOf, clientMode }: 
         if (url) textBody = `${textBody}\n\n${url}`.trim();
       }
 
-      body.content = textBody;
-      if (mediaIds && mediaIds.length > 0) body.mediaIds = mediaIds;
-
-      if (clientMode) {
-        try {
-          const creds = mastoRef.current!;
-          // Replicate /api/posts/create: bare-domain expansion + reply @-prefix.
-          let statusText = expandBareDomains(textBody);
-          if (mastoReplyTarget) {
-            const prefix = await mastodonReplyPrefix(creds, mastoReplyTarget.statusId, statusText);
-            if (prefix) statusText = `${prefix} ${statusText}`.trim();
-          }
-          await mastodonPostStatus(creds, {
-            status: statusText,
-            inReplyToId: mastoReplyTarget?.statusId,
-            mediaIds,
-          });
-          return true;
-        } catch (err) {
-          console.error("Mastodon post error:", err);
-          return false;
+      try {
+        const creds = mastoRef.current!;
+        // Bare-domain expansion + reply @-prefix (Mastodon threading rule).
+        let statusText = expandBareDomains(textBody);
+        if (mastoReplyTarget) {
+          const prefix = await mastodonReplyPrefix(creds, mastoReplyTarget.statusId, statusText);
+          if (prefix) statusText = `${prefix} ${statusText}`.trim();
         }
+        await mastodonPostStatus(creds, {
+          status: statusText,
+          inReplyToId: mastoReplyTarget?.statusId,
+          mediaIds,
+        });
+        return true;
+      } catch (err) {
+        console.error("Mastodon post error:", err);
+        return false;
       }
-
-      const res = await fetch("/api/posts/create", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      return res.ok;
     }
 
     // Determine which platforms to send to:
     // - Replies: only platforms where we have a corresponding target
     //   (you can't reply where there's no thread to graft onto).
     // - Quotes and new posts: both platforms (the user is broadcasting).
-    // In clientMode also require the corresponding client to be available.
-    const sendToBluesky = (isReply ? !!bsReplyTarget : true) && (!clientMode || !!bskyRef.current);
-    const sendToMastodon = (isReply ? !!mastoReplyTarget : true) && (!clientMode || !!mastoRef.current);
+    // Require the corresponding client to be available.
+    const sendToBluesky = (isReply ? !!bsReplyTarget : true) && !!bskyRef.current;
+    const sendToMastodon = (isReply ? !!mastoReplyTarget : true) && !!mastoRef.current;
 
     // When images are present, Mastodon goes first — Bluesky only posts if Mastodon succeeds
     if (images.length > 0) {

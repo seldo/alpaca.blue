@@ -22,7 +22,6 @@ export default function PostPage() {
   const params = useParams();
   const router = useRouter();
   const idParam = decodeURIComponent(params.id as string);
-  const isLegacy = /^\d+$/.test(idParam);
 
   const [post, setPost] = useState<ClientPost | null>(null);
   const [ancestors, setAncestors] = useState<ClientPost[]>([]);
@@ -32,59 +31,42 @@ export default function PostPage() {
   const bluesky = useRef<BlueskyClient | null>(null);
   const masto = useRef<MastodonCredentials | null>(null);
 
-  const loadClient = useCallback(async () => {
-    // key = "<platform>:<platformPostId>" — split on the first colon only
-    // (Bluesky AT URIs contain colons).
-    const sep = idParam.indexOf(":");
-    const platform = idParam.slice(0, sep);
-    const platformPostId = idParam.slice(sep + 1);
-
-    masto.current = await getMastodonCredentials();
-    bluesky.current = await BlueskyClient.create();
-
-    let result: { ancestors: ClientPost[]; main: ClientPost | null; replies: ClientPost[] };
-    if (platform === "bluesky") {
-      if (!bluesky.current) throw new Error("Bluesky session not found");
-      result = await bluesky.current.getPostThread(platformPostId);
-    } else if (platform === "mastodon") {
-      if (!masto.current) throw new Error("Mastodon not connected");
-      result = await fetchMastodonThread(masto.current, platformPostId);
-    } else {
-      throw new Error("Unknown post");
-    }
-    if (!result.main) throw new Error("Post not found");
-
-    const map = await getIdentityMap();
-    for (const p of [result.main, ...result.ancestors, ...result.replies]) enrichAuthor(p, map);
-    setPost(result.main);
-    setAncestors(result.ancestors);
-    setReplies(result.replies);
-  }, [idParam]);
-
-  const loadLegacy = useCallback(async () => {
-    const res = await fetch(`/api/posts/${idParam}`);
-    if (!res.ok) throw new Error((await res.json()).error || "Failed to load post");
-    setPost((await res.json()) as ClientPost);
-    const threadRes = await fetch(`/api/posts/${idParam}/thread`);
-    if (threadRes.ok) {
-      const { ancestors: ancs, replies: reps } = await threadRes.json();
-      setAncestors(ancs || []);
-      setReplies(reps || []);
-    }
-  }, [idParam]);
-
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      if (isLegacy) await loadLegacy();
-      else await loadClient();
+      // key = "<platform>:<platformPostId>" — split on the first colon only
+      // (Bluesky AT URIs contain colons).
+      const sep = idParam.indexOf(":");
+      const platform = idParam.slice(0, sep);
+      const platformPostId = idParam.slice(sep + 1);
+
+      masto.current = await getMastodonCredentials();
+      bluesky.current = await BlueskyClient.create();
+
+      let result: { ancestors: ClientPost[]; main: ClientPost | null; replies: ClientPost[] };
+      if (platform === "bluesky") {
+        if (!bluesky.current) throw new Error("Bluesky session not found");
+        result = await bluesky.current.getPostThread(platformPostId);
+      } else if (platform === "mastodon") {
+        if (!masto.current) throw new Error("Mastodon not connected");
+        result = await fetchMastodonThread(masto.current, platformPostId);
+      } else {
+        throw new Error("Unknown post");
+      }
+      if (!result.main) throw new Error("Post not found");
+
+      const map = await getIdentityMap();
+      for (const p of [result.main, ...result.ancestors, ...result.replies]) enrichAuthor(p, map);
+      setPost(result.main);
+      setAncestors(result.ancestors);
+      setReplies(result.replies);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load post");
     } finally {
       setLoading(false);
     }
-  }, [isLegacy, loadLegacy, loadClient]);
+  }, [idParam]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -110,7 +92,7 @@ export default function PostPage() {
       )}
 
       {post && (
-        <ClientActionsContext.Provider value={isLegacy ? null : actions}>
+        <ClientActionsContext.Provider value={actions}>
           <div className="thread-view">
             {ancestors.map((ancestor) => (
               <div key={`${ancestor.platform}-${ancestor.platformPostId}`} className="thread-ancestor-node">

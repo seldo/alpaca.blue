@@ -358,7 +358,6 @@ export function AppLayout({ children }: { children: ReactNode }) {
             <CreatePost
               replyTo={composeReplyTo}
               quoteOf={composeQuoteOf}
-              clientMode={["/timeline", "/mentions", "/profile"].includes(pathname)}
               onClose={closeCompose}
               onPosted={() => {
                 closeCompose();

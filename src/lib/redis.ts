@@ -9,34 +9,9 @@ export const redis = new Redis({
 // Set REDIS_KEY_PREFIX=dev: in .env.local for local development.
 export const KEY_PREFIX = process.env.REDIS_KEY_PREFIX ?? "";
 
-// Cache keys
-export const keys = {
-  mastodonFetched: (userId: number, type: "timeline" | "mentions") =>
-    `${KEY_PREFIX}mastodon:fetched:${userId}:${type}`,
-  blueskyFetched: (userId: number, type: "timeline" | "mentions") =>
-    `${KEY_PREFIX}bluesky:fetched:${userId}:${type}`,
-  timelineCache: (userId: number, type: "timeline" | "mentions") =>
-    `${KEY_PREFIX}timeline:cache:${userId}:${type}`,
-  mastodonReactions: (userId: number) =>
-    `${KEY_PREFIX}mastodon:reactions:${userId}`,
-  blueskyReactions: (userId: number) =>
-    `${KEY_PREFIX}bluesky:reactions:${userId}`,
-  authorFeedCursor: (userId: number, identityId: number) =>
-    `${KEY_PREFIX}author:cursor:${userId}:${identityId}`,
-  // Short-lived token → userId, minted by the app (which has the session) and
-  // validated by the streaming worker on SSE connect. Lets the cross-origin
-  // EventSource authenticate without the iron-session cookie (which isn't sent
-  // to the worker's domain).
-  realtimeToken: (token: string) => `${KEY_PREFIX}realtime:token:${token}`,
-};
-
-// TTLs (seconds)
-export const TTL = {
-  mastodonFetchDebounce: 30,
-  blueskyFetchDebounce: 30,
-  timelineCache: 60,
-  mastodonReactions: 60,
-  blueskyReactions: 60,
-  authorFeedCursor: 3600,
-  realtimeToken: 3600,
-};
+// Post fetching, timeline/reaction caching, and the realtime worker all moved
+// to the client, so their Redis keys are gone. What remains uses Redis directly
+// with KEY_PREFIX (Bluesky OAuth state/session + the identity profile-refresh
+// debounce in bluesky-server / identities routes).
+//
+// `identity:profile_fetched:{id}` (60s) — set inline by identities/[id]/refresh.

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { db } from "@/db";
-import { connectedAccounts, platformIdentities, posts, persons, matchSuggestions } from "@/db/schema";
+import { connectedAccounts, platformIdentities, persons, matchSuggestions } from "@/db/schema";
 import { eq, and } from "drizzle-orm";
 import { requireSession, unauthorizedResponse } from "@/lib/session";
 
@@ -21,13 +21,6 @@ export async function POST(request: NextRequest) {
             eq(connectedAccounts.userId, userId),
             eq(connectedAccounts.platform, "mastodon")
           )
-        );
-
-      // Remove Mastodon posts
-      await db
-        .delete(posts)
-        .where(
-          and(eq(posts.userId, userId), eq(posts.platform, "mastodon"))
         );
 
       // Keep the Mastodon platform identities — just mark them unfollowed.
@@ -52,7 +45,6 @@ export async function POST(request: NextRequest) {
 
     if (platform === "all") {
       // Nuclear option: wipe everything for this user
-      await db.delete(posts).where(eq(posts.userId, userId));
       await db.delete(matchSuggestions).where(eq(matchSuggestions.userId, userId));
       await db.delete(platformIdentities).where(eq(platformIdentities.userId, userId));
       await db.delete(persons).where(eq(persons.userId, userId));

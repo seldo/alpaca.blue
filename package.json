@@ -6,8 +6,7 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint",
-    "worker": "tsx worker/index.ts"
+    "lint": "eslint"
   },
   "dependencies": {
     "@atproto/api": "^0.19.3",
