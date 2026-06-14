@@ -61,6 +61,11 @@ function ImageModal({
           &#8250;
         </button>
       )}
+      {current.alt && (
+        <div className="image-modal-alt" onClick={(e) => e.stopPropagation()}>
+          {current.alt}
+        </div>
+      )}
       {showArrows && (
         <div className="image-modal-counter">
           {index + 1} / {images.length}
