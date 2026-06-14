@@ -436,14 +436,16 @@ export function PostCard({ post }: { post: PostData }) {
     }
   }
 
-  // Only link to an in-app identity page when we actually have one. Authors who
-  // aren't in the identity map (not followed / not matched — e.g. a reposted or
-  // replied-to account) keep author.id === 0; linking those to /identities/0 is
-  // a dead end, so the avatar just renders unlinked (the handle still links out).
+  // Avatar always links to an in-app profile: a resolved person, a known
+  // identity row, or — for anyone else (not followed / not matched) — the
+  // identity page in "actor" mode keyed by "<platform>:<handle>", which fetches
+  // their profile + feed live.
   const avatarLink = post.person
     ? `/persons/${post.person.id}`
     : author && author.id > 0
     ? `/identities/${author.id}`
+    : author
+    ? `/identities/${encodeURIComponent(`${author.platform}:${author.handle}`)}`
     : null;
 
   return (

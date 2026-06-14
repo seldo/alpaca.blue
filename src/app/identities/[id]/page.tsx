@@ -17,6 +17,7 @@ import {
   fetchMastodonAuthorStatuses,
   fetchMastodonAccountById,
   fetchMastodonRelationship,
+  lookupMastodonAccount,
   mastodonFollow,
   type MastodonCredentials,
 } from "@/lib/client/mastodon";
@@ -101,6 +102,59 @@ export default function IdentityPage() {
     ready.current = true;
   }, []);
 
+  // Builds an Identity from a live profile lookup, for actors the user doesn't
+  // follow (no DB row). Sets stats + follow state as a side effect, mirroring
+  // loadProfile. Cross-references the identity map so a matched actor still
+  // links to its person.
+  const resolveActor = useCallback(async (platform: string, actor: string): Promise<Identity | null> => {
+    const map = await getIdentityMap();
+    if (platform === "bluesky" && bluesky.current) {
+      const p = await bluesky.current.getProfile(actor);
+      const handle = (p.handle as string) || actor;
+      setStats({
+        followers: (p.followersCount as number) ?? null,
+        following: (p.followsCount as number) ?? null,
+        posts: (p.postsCount as number) ?? null,
+      });
+      followUriRef.current = extractBlueskyFollowUri(p);
+      setIsFollowing(!!followUriRef.current);
+      return {
+        id: 0,
+        personId: map.byHandle.get(handle)?.personId ?? null,
+        platform: "bluesky",
+        handle,
+        did: (p.did as string) ?? null,
+        displayName: (p.displayName as string) ?? null,
+        avatarUrl: (p.avatar as string) ?? null,
+        bio: (p.description as string) ?? null,
+        bannerUrl: (p.banner as string) ?? null,
+        profileUrl: `https://bsky.app/profile/${handle}`,
+      };
+    }
+    if (platform === "mastodon" && masto.current) {
+      const acct = await lookupMastodonAccount(masto.current, actor);
+      if (!acct) return null;
+      const instanceHost = new URL(masto.current.instanceUrl).hostname;
+      const handle = acct.acct.includes("@") ? `@${acct.acct}` : `@${acct.acct}@${instanceHost}`;
+      setStats({ followers: acct.followers_count, following: acct.following_count, posts: acct.statuses_count });
+      setIsFollowing(!!(await fetchMastodonRelationship(masto.current, acct.id)));
+      const banner = acct.header && !acct.header.includes("missing") ? acct.header : null;
+      return {
+        id: 0,
+        personId: map.byHandle.get(handle)?.personId ?? null,
+        platform: "mastodon",
+        handle,
+        did: acct.id,
+        displayName: acct.display_name || null,
+        avatarUrl: acct.avatar || null,
+        bio: acct.note || null,
+        bannerUrl: banner,
+        profileUrl: acct.url || null,
+      };
+    }
+    return null;
+  }, []);
+
   // Live profile → stats, banner, follow state.
   const loadProfile = useCallback(async (ident: Identity) => {
     if (ident.platform === "bluesky" && bluesky.current && ident.did) {
@@ -167,12 +221,23 @@ export default function IdentityPage() {
     setFetching(true);
     try {
       await ensureClients();
-      const identRes = await fetch("/api/graph/identities");
-      const ident = findIdentity(await identRes.json(), parseInt(identityId));
+      // identityId is either a numeric DB id (followed/matched identity) or a
+      // "<platform>:<handle>" actor key (anyone — fetched live).
+      let ident: Identity | null;
+      let profileLoad: Promise<unknown>;
+      if (/^\d+$/.test(identityId)) {
+        const identRes = await fetch("/api/graph/identities");
+        ident = findIdentity(await identRes.json(), parseInt(identityId));
+        profileLoad = ident ? loadProfile(ident) : Promise.resolve();
+      } else {
+        const sep = identityId.indexOf(":");
+        ident = await resolveActor(identityId.slice(0, sep), identityId.slice(sep + 1));
+        profileLoad = Promise.resolve(); // resolveActor already set stats/follow
+      }
       setIdentity(ident);
       identityRef.current = ident;
       if (!ident) return;
-      await Promise.all([loadProfile(ident), fetchTabPage(ident, tab, true)]);
+      await Promise.all([profileLoad, fetchTabPage(ident, tab, true)]);
     } catch (err) {
       console.error("Failed to load identity:", err);
     } finally {
@@ -180,7 +245,7 @@ export default function IdentityPage() {
       setLoading(false);
       inFlight.current = false;
     }
-  }, [identityId, ensureClients, loadProfile, fetchTabPage, tab]);
+  }, [identityId, ensureClients, loadProfile, resolveActor, fetchTabPage, tab]);
 
   useEffect(() => { load(); }, [load]);
 

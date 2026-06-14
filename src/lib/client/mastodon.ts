@@ -109,6 +109,35 @@ export async function fetchMastodonReactions(
     });
 }
 
+export interface MastodonAccountView {
+  id: string;
+  username: string;
+  acct: string;
+  display_name: string;
+  avatar: string;
+  header: string;
+  note: string;
+  url: string;
+  followers_count: number;
+  following_count: number;
+  statuses_count: number;
+}
+
+// Resolves a @user@instance handle to its account (via webfinger), for viewing
+// any actor's profile — including ones the user doesn't follow.
+export async function lookupMastodonAccount(
+  creds: MastodonCredentials,
+  handle: string,
+): Promise<MastodonAccountView | null> {
+  const acct = handle.replace(/^@/, "");
+  const res = await fetch(
+    `${creds.instanceUrl}/api/v1/accounts/lookup?acct=${encodeURIComponent(acct)}`,
+    { headers: { Authorization: `Bearer ${creds.accessToken}` } },
+  );
+  if (!res.ok) return null;
+  return res.json();
+}
+
 // Fetches a status + its thread context (ancestors + descendants) for the
 // detail view.
 export async function fetchMastodonThread(
