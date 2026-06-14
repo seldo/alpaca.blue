@@ -1,56 +1,33 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
+// Person view: all posts across a resolved person's linked identities. The
+// identity cards come from /api/graph/identities (matching data — server-owned),
+// but the posts are fetched client-side from each identity's author feed and
+// merged/deduped in the browser. No server posts route.
+
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
 import { Avatar } from "@/components/Avatar";
 import { usePullToRefresh } from "@/lib/usePullToRefresh";
+import { BlueskyClient } from "@/lib/client/bluesky";
+import { getMastodonCredentials, type MastodonCredentials } from "@/lib/client/mastodon";
+import { getIdentityMap, enrichAuthor, fetchPostsForIdentity } from "@/lib/client/identities";
+import { mergeTimeline } from "@/lib/client/dedup";
+import { likePost, repostPost } from "@/lib/client/actions";
+import { ClientActionsContext, type ClientActions } from "@/lib/client/ClientActionsContext";
+import type { ClientPost } from "@/lib/client/types";
 
 interface Identity {
   id: number;
   platform: string;
   handle: string;
+  did: string | null;
   displayName: string | null;
   avatarUrl: string | null;
   bio: string | null;
   bannerUrl: string | null;
-}
-
-interface PostData {
-  id: number;
-  platform: string;
-  platformPostId: string;
-  platformPostCid?: string | null;
-  postUrl: string | null;
-  content: string | null;
-  contentHtml: string | null;
-  media: Array<{ type: string; url: string; alt: string }> | null;
-  replyToId: string | null;
-  repostOfId: string | null;
-  quotedPost: {
-    uri: string;
-    authorHandle: string;
-    authorDisplayName?: string;
-    authorAvatar?: string;
-    text: string;
-    media?: Array<{ type: string; url: string; alt: string }>;
-    postedAt?: string;
-  } | null;
-  likeCount: number | null;
-  repostCount: number | null;
-  replyCount: number | null;
-  postedAt: string;
-  author: {
-    id: number;
-    handle: string;
-    displayName: string | null;
-    avatarUrl: string | null;
-    platform: string;
-    profileUrl: string | null;
-  } | null;
-  person: { id: number; displayName: string | null } | null;
-  alsoPostedOn: Array<{ platform: string; postUrl: string | null; platformPostId: string; platformPostCid: string | null; threadRootId: string | null; threadRootCid: string | null }>;
 }
 
 export default function PersonPage() {
@@ -58,126 +35,99 @@ export default function PersonPage() {
   const router = useRouter();
   const personId = params.id as string;
 
-  const [personName, setPersonName] = useState<string>("");
+  const [personName, setPersonName] = useState("");
   const [identities, setIdentities] = useState<Identity[]>([]);
-  const [posts, setPosts] = useState<PostData[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [posts, setPosts] = useState<ClientPost[]>([]);
   const [loading, setLoading] = useState(true);
   const [fetching, setFetching] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
-  const isFetchingRef = useRef(false);
-  const pendingScrollRestore = useRef<number | null>(null);
+  const [hasMore, setHasMore] = useState(false);
+  const bluesky = useRef<BlueskyClient | null>(null);
+  const masto = useRef<MastodonCredentials | null>(null);
+  const ready = useRef(false);
+  const inFlight = useRef(false);
+  const identitiesRef = useRef<Identity[]>([]);
+  const allPosts = useRef<ClientPost[]>([]); // accumulated across pages
+  const cursors = useRef<Record<number, string | null>>({}); // identityId → next cursor (null = exhausted)
 
-  const cacheKey = `person_cache_${personId}`;
-  const scrollKey = `person_scroll_${personId}`;
+  // Fetches a page of every linked identity's feed and re-renders the merged
+  // view. reset=true clears accumulators and starts from the top.
+  const fetchPage = useCallback(async (reset: boolean) => {
+    const clients = { bluesky: bluesky.current, mastodon: masto.current };
+    const results = await Promise.all(
+      identitiesRef.current.map(async (i) => {
+        const cursor = reset ? undefined : cursors.current[i.id];
+        if (!reset && cursor === null) return { id: i.id, posts: [] as ClientPost[], cursor: null };
+        try {
+          const r = await fetchPostsForIdentity(i, clients, { cursor: cursor ?? undefined });
+          return { id: i.id, posts: r.posts, cursor: r.cursor };
+        } catch (err) {
+          console.error("[person] identity feed failed:", err);
+          return { id: i.id, posts: [] as ClientPost[], cursor: cursors.current[i.id] ?? null };
+        }
+      }),
+    );
+    for (const res of results) {
+      cursors.current[res.id] = res.cursor;
+      allPosts.current.push(...res.posts);
+    }
+    const map = await getIdentityMap();
+    const all = [...allPosts.current];
+    for (const p of all) enrichAuthor(p, map);
+    all.sort((a, b) => b.postedAt.localeCompare(a.postedAt));
+    setPosts(mergeTimeline(all));
+    setHasMore(Object.values(cursors.current).some((c) => c !== null));
+  }, []);
 
-  const fetchData = useCallback(async () => {
-    if (isFetchingRef.current) return;
-    isFetchingRef.current = true;
-    sessionStorage.removeItem(cacheKey);
-    sessionStorage.removeItem(scrollKey);
+  const load = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
     setFetching(true);
-
     try {
-      const [identRes, postsRes] = await Promise.all([
-        fetch("/api/graph/identities"),
-        fetch(`/api/persons/${personId}/posts?limit=50`),
-      ]);
-
+      if (!ready.current) {
+        masto.current = await getMastodonCredentials();
+        bluesky.current = await BlueskyClient.create();
+        ready.current = true;
+      }
+      // Identity cards + which identities belong to this person.
+      const identRes = await fetch("/api/graph/identities");
       const identData = await identRes.json();
-      const person = identData.persons?.find(
-        (p: { id: number }) => p.id === parseInt(personId)
-      );
-      if (person) {
-        setPersonName(person.displayName || "Unknown");
-        setIdentities(person.identities || []);
-      }
+      const person = identData.persons?.find((p: { id: number }) => p.id === parseInt(personId));
+      const personIdentities: Identity[] = person?.identities || [];
+      setPersonName(person?.displayName || "Unknown");
+      setIdentities(personIdentities);
+      identitiesRef.current = personIdentities;
 
-      const postsData = await postsRes.json();
-      if (postsData.posts) {
-        setPosts(postsData.posts);
-        setNextCursor(postsData.nextCursor);
-      }
+      allPosts.current = [];
+      cursors.current = {};
+      await fetchPage(true);
     } catch (err) {
       console.error("Failed to load person:", err);
     } finally {
       setFetching(false);
       setLoading(false);
-      isFetchingRef.current = false;
+      inFlight.current = false;
     }
-  }, [personId, cacheKey, scrollKey]);
+  }, [personId, fetchPage]);
 
-  // Cache state
-  useEffect(() => {
-    if (posts.length > 0 || identities.length > 0) {
-      sessionStorage.setItem(cacheKey, JSON.stringify({ personName, identities, posts, nextCursor }));
-    }
-  }, [personName, identities, posts, nextCursor, cacheKey]);
-
-  // Save scroll position
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-    function handleScroll() {
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        sessionStorage.setItem(scrollKey, String(window.scrollY));
-      }, 100);
-    }
-    window.addEventListener("scroll", handleScroll, { passive: true });
-    return () => {
-      clearTimeout(timer);
-      window.removeEventListener("scroll", handleScroll);
-    };
-  }, [scrollKey]);
-
-  // Restore from cache or fetch fresh
-  useEffect(() => {
-    const cached = sessionStorage.getItem(cacheKey);
-    if (cached) {
-      try {
-        const { personName: n, identities: ids, posts: p, nextCursor: c } = JSON.parse(cached);
-        if (p?.length > 0 || ids?.length > 0) {
-          setPersonName(n || "");
-          setIdentities(ids || []);
-          setPosts(p || []);
-          setNextCursor(c);
-          setLoading(false);
-          const savedScroll = sessionStorage.getItem(scrollKey);
-          if (savedScroll) pendingScrollRestore.current = parseInt(savedScroll);
-          return;
-        }
-      } catch {
-        // fall through
-      }
-    }
-    fetchData();
-  }, [fetchData, cacheKey, scrollKey]);
-
-  useLayoutEffect(() => {
-    if (pendingScrollRestore.current !== null && posts.length > 0) {
-      window.scrollTo(0, pendingScrollRestore.current);
-      pendingScrollRestore.current = null;
-    }
-  }, [posts]);
-
-  const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(fetchData, fetching);
-
-  async function loadMore() {
-    if (!nextCursor || loadingMore) return;
+  const loadMore = useCallback(async () => {
+    if (loadingMore || !hasMore) return;
     setLoadingMore(true);
     try {
-      const res = await fetch(
-        `/api/persons/${personId}/posts?limit=50&cursor=${nextCursor}`
-      );
-      const data = await res.json();
-      setPosts((prev) => [...prev, ...data.posts]);
-      setNextCursor(data.nextCursor);
-    } catch (err) {
-      console.error("Load more error:", err);
+      await fetchPage(false);
     } finally {
       setLoadingMore(false);
     }
-  }
+  }, [loadingMore, hasMore, fetchPage]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(load, fetching);
+
+  const actions: ClientActions = {
+    like: (post) => likePost(post, { bluesky: bluesky.current, mastodon: masto.current }),
+    repost: (post) => repostPost(post, { bluesky: bluesky.current, mastodon: masto.current }),
+  };
 
   return (
     <AppLayout>
@@ -195,14 +145,12 @@ export default function PersonPage() {
         </div>
       )}
 
-      {loading && (
-        <div className="spinner-container">
-          <div className="spinner" />
-        </div>
-      )}
+      {loading && <div className="spinner-container"><div className="spinner" /></div>}
 
       {!loading && (
         <>
+          {personName && <h1 className="section-title" style={{ marginTop: 8 }}>{personName}</h1>}
+
           {identities.length > 0 && (
             <section className="section">
               <h2 className="section-title">Accounts</h2>
@@ -214,11 +162,7 @@ export default function PersonPage() {
                     )}
                     <div className="person-identity-row">
                       {i.avatarUrl && (
-                        <Avatar
-                          identityId={i.id}
-                          src={i.avatarUrl}
-                          className="person-identity-avatar"
-                        />
+                        <Avatar identityId={i.id} src={i.avatarUrl} className="person-identity-avatar" />
                       )}
                       <span className={`platform-badge ${i.platform}`}>
                         {i.platform === "bluesky" ? "B" : "M"}
@@ -239,31 +183,22 @@ export default function PersonPage() {
           )}
 
           <section className="section">
-            <h2 className="section-title">
-              Posts {posts.length > 0 && `(${posts.length})`}
-            </h2>
-
-            {posts.length === 0 && (
-              <p className="text-muted">No posts fetched yet for this person.</p>
-            )}
-
-            <div className="timeline-feed">
-              {posts.map((post) => (
-                <PostCard key={`${post.platform}-${post.id}`} post={post} />
-              ))}
-
-              {nextCursor && (
-                <div className="load-more">
-                  <button
-                    onClick={loadMore}
-                    disabled={loadingMore}
-                    className="btn btn-outline load-more-btn"
-                  >
-                    {loadingMore ? "Loading..." : "Load more"}
-                  </button>
-                </div>
-              )}
-            </div>
+            <h2 className="section-title">Posts {posts.length > 0 && `(${posts.length})`}</h2>
+            {posts.length === 0 && <p className="text-muted">No posts found for this person.</p>}
+            <ClientActionsContext.Provider value={actions}>
+              <div className="timeline-feed">
+                {posts.map((post) => (
+                  <PostCard key={`${post.platform}-${post.platformPostId}`} post={post} />
+                ))}
+                {hasMore && (
+                  <div className="load-more">
+                    <button onClick={loadMore} disabled={loadingMore} className="btn btn-outline load-more-btn">
+                      {loadingMore ? "Loading..." : "Load more"}
+                    </button>
+                  </div>
+                )}
+              </div>
+            </ClientActionsContext.Provider>
           </section>
         </>
       )}

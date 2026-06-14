@@ -1,92 +1,79 @@
 "use client";
 
-import { useState, useEffect } from "react";
+// Post detail + thread. Two routing forms:
+//   • numeric id  → legacy server-backed post (still produced by server pages
+//     like /profile); fetched via /api/posts/[id] + /thread.
+//   • "<platform>:<platformPostId>" (URL-encoded) → client pipeline; the post +
+//     thread are fetched directly from the platform in the browser.
+// PostCard pushes the URI form for client posts (id <= 0).
+
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
-
-interface PostData {
-  id: number;
-  platform: string;
-  platformPostId: string;
-  platformPostCid?: string | null;
-  postUrl: string | null;
-  content: string | null;
-  contentHtml: string | null;
-  media: Array<{ type: string; url: string; alt: string }> | null;
-  replyToId: string | null;
-  repostOfId: string | null;
-  quotedPost: {
-    uri: string;
-    authorHandle: string;
-    authorDisplayName?: string;
-    authorAvatar?: string;
-    text: string;
-    media?: Array<{ type: string; url: string; alt: string }>;
-    postedAt?: string;
-  } | null;
-  likeCount: number | null;
-  repostCount: number | null;
-  replyCount: number | null;
-  postedAt: string;
-  author: {
-    id: number;
-    handle: string;
-    displayName: string | null;
-    avatarUrl: string | null;
-    platform: string;
-    profileUrl: string | null;
-  } | null;
-  person: {
-    id: number;
-    displayName: string | null;
-  } | null;
-  alsoPostedOn: Array<{ platform: string; postUrl: string | null; platformPostId: string; platformPostCid: string | null; threadRootId: string | null; threadRootCid: string | null }>;
-  linkCard?: { url: string; title: string; description?: string; thumb?: string } | null;
-}
+import { BlueskyClient } from "@/lib/client/bluesky";
+import { getMastodonCredentials, fetchMastodonThread, type MastodonCredentials } from "@/lib/client/mastodon";
+import { getIdentityMap, enrichAuthor } from "@/lib/client/identities";
+import { likePost, repostPost } from "@/lib/client/actions";
+import { ClientActionsContext, type ClientActions } from "@/lib/client/ClientActionsContext";
+import type { ClientPost } from "@/lib/client/types";
 
 export default function PostPage() {
   const params = useParams();
   const router = useRouter();
-  const [post, setPost] = useState<PostData | null>(null);
-  const [ancestors, setAncestors] = useState<PostData[]>([]);
-  const [replies, setReplies] = useState<PostData[]>([]);
+  const idParam = decodeURIComponent(params.id as string);
+
+  const [post, setPost] = useState<ClientPost | null>(null);
+  const [ancestors, setAncestors] = useState<ClientPost[]>([]);
+  const [replies, setReplies] = useState<ClientPost[]>([]);
   const [loading, setLoading] = useState(true);
-  const [threadLoading, setThreadLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const bluesky = useRef<BlueskyClient | null>(null);
+  const masto = useRef<MastodonCredentials | null>(null);
 
-  useEffect(() => {
-    async function init() {
-      try {
-        const res = await fetch(`/api/posts/${params.id}`);
-        if (!res.ok) {
-          const data = await res.json();
-          throw new Error(data.error || "Failed to load post");
-        }
-        setPost(await res.json());
-      } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to load post");
-      } finally {
-        setLoading(false);
-      }
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      // key = "<platform>:<platformPostId>" — split on the first colon only
+      // (Bluesky AT URIs contain colons).
+      const sep = idParam.indexOf(":");
+      const platform = idParam.slice(0, sep);
+      const platformPostId = idParam.slice(sep + 1);
 
-      // Fetch thread context in the background
-      setThreadLoading(true);
-      try {
-        const threadRes = await fetch(`/api/posts/${params.id}/thread`);
-        if (threadRes.ok) {
-          const { ancestors: ancs, replies: reps } = await threadRes.json();
-          setAncestors(ancs || []);
-          setReplies(reps || []);
-        }
-      } catch {
-        // Thread context is non-critical; fail silently
-      } finally {
-        setThreadLoading(false);
+      masto.current = await getMastodonCredentials();
+      bluesky.current = await BlueskyClient.create();
+
+      let result: { ancestors: ClientPost[]; main: ClientPost | null; replies: ClientPost[] };
+      if (platform === "bluesky") {
+        if (!bluesky.current) throw new Error("Bluesky session not found");
+        result = await bluesky.current.getPostThread(platformPostId);
+      } else if (platform === "mastodon") {
+        if (!masto.current) throw new Error("Mastodon not connected");
+        result = await fetchMastodonThread(masto.current, platformPostId);
+      } else {
+        throw new Error("Unknown post");
       }
+      if (!result.main) throw new Error("Post not found");
+
+      const map = await getIdentityMap();
+      for (const p of [result.main, ...result.ancestors, ...result.replies]) enrichAuthor(p, map);
+      setPost(result.main);
+      setAncestors(result.ancestors);
+      setReplies(result.replies);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to load post");
+    } finally {
+      setLoading(false);
     }
-    init();
-  }, [params.id]);
+  }, [idParam]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const actions: ClientActions = {
+    like: (p) => likePost(p, { bluesky: bluesky.current, mastodon: masto.current }),
+    repost: (p) => repostPost(p, { bluesky: bluesky.current, mastodon: masto.current }),
+  };
 
   return (
     <AppLayout>
@@ -98,52 +85,39 @@ export default function PostPage() {
         Back
       </button>
 
-      {loading && (
-        <div className="spinner-container">
-          <div className="spinner" />
-        </div>
-      )}
+      {loading && <div className="spinner-container"><div className="spinner" /></div>}
 
       {error && (
-        <p className="error" style={{ textAlign: "center", padding: "40px 0" }}>
-          {error}
-        </p>
+        <p className="error" style={{ textAlign: "center", padding: "40px 0" }}>{error}</p>
       )}
 
       {post && (
-        <div className="thread-view">
-          {ancestors.map((ancestor) => (
-            <div key={`${ancestor.platform}-${ancestor.platformPostId}`} className="thread-ancestor-node">
-              <PostCard post={ancestor} />
-            </div>
-          ))}
+        <ClientActionsContext.Provider value={actions}>
+          <div className="thread-view">
+            {ancestors.map((ancestor) => (
+              <div key={`${ancestor.platform}-${ancestor.platformPostId}`} className="thread-ancestor-node">
+                <PostCard post={ancestor} />
+              </div>
+            ))}
 
-          <div className="thread-focal-node">
-            <PostCard post={post} />
+            <div className="thread-focal-node">
+              <PostCard post={post} />
+            </div>
+
+            {replies.length > 0 && (
+              <>
+                <div className="thread-replies-label">Replies</div>
+                {replies.map((reply) => (
+                  <PostCard key={`${reply.platform}-${reply.platformPostId}`} post={reply} />
+                ))}
+              </>
+            )}
+
+            {replies.length === 0 && ancestors.length === 0 && (
+              <p className="thread-empty">No replies yet.</p>
+            )}
           </div>
-
-          {(threadLoading && replies.length === 0) && (
-            <div className="thread-loading">
-              <div className="spinner spinner-sm" />
-            </div>
-          )}
-
-          {replies.length > 0 && (
-            <>
-              <div className="thread-replies-label">Replies</div>
-              {replies.map((reply) => (
-                <PostCard
-                  key={`${reply.platform}-${reply.platformPostId}`}
-                  post={reply}
-                                 />
-              ))}
-            </>
-          )}
-
-          {!threadLoading && replies.length === 0 && ancestors.length === 0 && (
-            <p className="thread-empty">No replies yet.</p>
-          )}
-        </div>
+        </ClientActionsContext.Provider>
       )}
     </AppLayout>
   );

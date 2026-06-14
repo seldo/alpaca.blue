@@ -1,10 +1,22 @@
 "use client";
 
+// The user's own posts feed, powered by the client pipeline: own Bluesky author
+// feed + own Mastodon statuses, merged + deduped in the browser with cursor
+// pagination. The header/bio chrome still comes from /api/accounts + /api/auth/me
+// (account metadata — small, server-owned). No server posts route.
+
 import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
 import { usePullToRefresh } from "@/lib/usePullToRefresh";
+import { BlueskyClient } from "@/lib/client/bluesky";
+import { getMastodonCredentials, fetchMastodonAuthorStatuses, type MastodonCredentials } from "@/lib/client/mastodon";
+import { getIdentityMap, enrichAuthor } from "@/lib/client/identities";
+import { mergeTimeline } from "@/lib/client/dedup";
+import { likePost, repostPost } from "@/lib/client/actions";
+import { ClientActionsContext, type ClientActions } from "@/lib/client/ClientActionsContext";
+import type { ClientPost } from "@/lib/client/types";
 
 interface UserInfo {
   blueskyHandle: string;
@@ -22,42 +34,23 @@ interface Account {
   profileUrl: string | null;
 }
 
-interface PostData {
-  id: number;
-  platform: string;
-  platformPostId: string;
-  platformPostCid?: string | null;
-  postUrl: string | null;
-  content: string | null;
-  contentHtml: string | null;
-  media: Array<{ type: string; url: string; alt: string }> | null;
-  replyToId: string | null;
-  repostOfId: string | null;
-  quotedPost: {
-    uri: string; authorHandle: string; authorDisplayName?: string;
-    authorAvatar?: string; text: string;
-    media?: Array<{ type: string; url: string; alt: string }>; postedAt?: string;
-  } | null;
-  likeCount: number | null;
-  repostCount: number | null;
-  replyCount: number | null;
-  postedAt: string;
-  author: { id: number; handle: string; displayName: string | null; avatarUrl: string | null; platform: string; profileUrl: string | null } | null;
-  person: { id: number; displayName: string | null } | null;
-  alsoPostedOn: Array<{ platform: string; postUrl: string | null; platformPostId: string; platformPostCid: string | null; threadRootId: string | null; threadRootCid: string | null }>;
-  replyToAuthor: { handle: string; dbPostId: number; postUrl: string | null } | null;
-}
-
 export default function ProfilePage() {
   const router = useRouter();
   const [user, setUser] = useState<UserInfo | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [posts, setPosts] = useState<PostData[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
+  const [posts, setPosts] = useState<ClientPost[]>([]);
   const [loading, setLoading] = useState(true);
-  const [loadingMore, setLoadingMore] = useState(false);
   const [fetching, setFetching] = useState(false);
-  const isFetchingRef = useRef(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+
+  const bluesky = useRef<BlueskyClient | null>(null);
+  const masto = useRef<MastodonCredentials | null>(null);
+  const ready = useRef(false);
+  const allPosts = useRef<ClientPost[]>([]);
+  const bskyCursor = useRef<string | null | undefined>(undefined); // null = exhausted
+  const mastoCursor = useRef<string | null | undefined>(undefined);
+  const inFlight = useRef(false);
 
   const fetchAccounts = useCallback(async () => {
     try {
@@ -69,33 +62,68 @@ export default function ProfilePage() {
     }
   }, []);
 
-  const refreshPosts = useCallback(async () => {
-    if (isFetchingRef.current) return;
-    isFetchingRef.current = true;
-    setFetching(true);
+  // Fetches a page of own posts from each platform and re-renders the merged
+  // view. reset clears accumulators and starts from the top.
+  const fetchPage = useCallback(async (reset: boolean) => {
+    if (reset) {
+      allPosts.current = [];
+      bskyCursor.current = undefined;
+      mastoCursor.current = undefined;
+    }
+    const tasks: Promise<void>[] = [];
 
+    if (bluesky.current && (reset || bskyCursor.current !== null)) {
+      const cursor = reset ? undefined : bskyCursor.current ?? undefined;
+      tasks.push(
+        bluesky.current.getAuthorFeed(bluesky.current.did, { cursor }).then((r) => {
+          bskyCursor.current = r.cursor;
+          allPosts.current.push(...r.posts);
+        }).catch((e) => console.error("[profile] bluesky feed failed:", e)),
+      );
+    }
+    if (masto.current?.accountId && (reset || mastoCursor.current !== null)) {
+      const maxId = reset ? undefined : mastoCursor.current ?? undefined;
+      const creds = masto.current;
+      tasks.push(
+        fetchMastodonAuthorStatuses(creds, creds.accountId!, { maxId }).then((r) => {
+          mastoCursor.current = r.cursor;
+          allPosts.current.push(...r.posts);
+        }).catch((e) => console.error("[profile] mastodon feed failed:", e)),
+      );
+    }
+    await Promise.all(tasks);
+
+    const map = await getIdentityMap();
+    const all = [...allPosts.current];
+    for (const p of all) enrichAuthor(p, map);
+    all.sort((a, b) => b.postedAt.localeCompare(a.postedAt));
+    setPosts(mergeTimeline(all));
+    setHasMore(
+      (!!bluesky.current && bskyCursor.current !== null) ||
+      (!!masto.current?.accountId && mastoCursor.current !== null),
+    );
+  }, []);
+
+  const refreshPosts = useCallback(async () => {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setFetching(true);
     try {
-      const res = await fetch("/api/profile/posts", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setPosts(data.posts);
-        setNextCursor(data.nextCursor);
+      if (!ready.current) {
+        masto.current = await getMastodonCredentials();
+        bluesky.current = await BlueskyClient.create();
+        ready.current = true;
       }
-      // /api/profile/posts refreshes the user's own bio + banner data
-      // server-side. Refetch /api/accounts so the header reflects it.
+      await fetchPage(true);
       await fetchAccounts();
     } catch (err) {
       console.error("Profile refresh error:", err);
     } finally {
       setFetching(false);
       setLoading(false);
-      isFetchingRef.current = false;
+      inFlight.current = false;
     }
-  }, [fetchAccounts]);
+  }, [fetchPage, fetchAccounts]);
 
   useEffect(() => {
     fetch("/api/auth/me").then((r) => (r.ok ? r.json() : null)).then(setUser).catch(() => {});
@@ -103,22 +131,29 @@ export default function ProfilePage() {
     refreshPosts();
   }, [refreshPosts, fetchAccounts]);
 
+  // Pull in the user's own post after composing.
+  useEffect(() => {
+    function handler() { setTimeout(refreshPosts, 1000); }
+    window.addEventListener("posts:created", handler);
+    return () => window.removeEventListener("posts:created", handler);
+  }, [refreshPosts]);
+
   const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refreshPosts, fetching);
 
   async function loadMore() {
-    if (!nextCursor || loadingMore) return;
+    if (!hasMore || loadingMore) return;
     setLoadingMore(true);
     try {
-      const res = await fetch(`/api/profile/posts?cursor=${nextCursor}&limit=50`);
-      const data = await res.json();
-      setPosts((prev) => [...prev, ...data.posts]);
-      setNextCursor(data.nextCursor);
-    } catch (err) {
-      console.error("Load more error:", err);
+      await fetchPage(false);
     } finally {
       setLoadingMore(false);
     }
   }
+
+  const actions: ClientActions = {
+    like: (post) => likePost(post, { bluesky: bluesky.current, mastodon: masto.current }),
+    repost: (post) => repostPost(post, { bluesky: bluesky.current, mastodon: masto.current }),
+  };
 
   return (
     <AppLayout>
@@ -151,18 +186,20 @@ export default function ProfilePage() {
       )}
 
       {!loading && (
-        <div className="timeline-feed">
-          {posts.map((post) => (
-            <PostCard key={`${post.platform}-${post.id}`} post={post} />
-          ))}
-          {nextCursor && (
-            <div className="load-more">
-              <button onClick={loadMore} disabled={loadingMore} className="btn btn-outline load-more-btn">
-                {loadingMore ? "Loading..." : "Load more"}
-              </button>
-            </div>
-          )}
-        </div>
+        <ClientActionsContext.Provider value={actions}>
+          <div className="timeline-feed">
+            {posts.map((post) => (
+              <PostCard key={`${post.platform}-${post.platformPostId}`} post={post} />
+            ))}
+            {hasMore && (
+              <div className="load-more">
+                <button onClick={loadMore} disabled={loadingMore} className="btn btn-outline load-more-btn">
+                  {loadingMore ? "Loading..." : "Load more"}
+                </button>
+              </div>
+            )}
+          </div>
+        </ClientActionsContext.Provider>
       )}
     </AppLayout>
   );

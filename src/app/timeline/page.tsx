@@ -1,271 +1,41 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useLayoutEffect } from "react";
+// Home timeline, powered entirely by the client pipeline: Bluesky (direct PDS
+// via brokered DPoP) + Mastodon, fetched, deduped, and merged in the browser,
+// with Mastodon WSS streaming + Bluesky polling for realtime. No /api/timeline,
+// no server fetch, no worker.
+
+import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 import { usePullToRefresh } from "@/lib/usePullToRefresh";
-import { useRealtimeUpdates } from "@/lib/useRealtimeUpdates";
+import { useClientTimeline } from "@/lib/client/useClientTimeline";
+import { ClientActionsContext } from "@/lib/client/ClientActionsContext";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
 
-interface PostData {
-  id: number;
-  platform: string;
-  platformPostId: string;
-  platformPostCid?: string | null;
-  postUrl: string | null;
-  content: string | null;
-  contentHtml: string | null;
-  media: Array<{ type: string; url: string; alt: string }> | null;
-  replyToId: string | null;
-  repostOfId: string | null;
-  quotedPost: {
-    uri: string;
-    authorHandle: string;
-    authorDisplayName?: string;
-    authorAvatar?: string;
-    text: string;
-    media?: Array<{ type: string; url: string; alt: string }>;
-    postedAt?: string;
-  } | null;
-  likeCount: number | null;
-  repostCount: number | null;
-  replyCount: number | null;
-  postedAt: string;
-  author: {
-    id: number;
-    handle: string;
-    displayName: string | null;
-    avatarUrl: string | null;
-    platform: string;
-    profileUrl: string | null;
-  } | null;
-  person: {
-    id: number;
-    displayName: string | null;
-  } | null;
-  alsoPostedOn: Array<{ platform: string; postUrl: string | null; platformPostId: string; platformPostCid: string | null; threadRootId: string | null; threadRootCid: string | null }>;
-  linkCard: { url: string; title: string; description?: string; thumb?: string } | null;
-}
-
 export default function TimelinePage() {
   const router = useRouter();
-  const [posts, setPosts] = useState<PostData[]>([]);
-  const [nextCursor, setNextCursor] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [fetching, setFetching] = useState(false);
-  const [fetchError, setFetchError] = useState<string | null>(null);
-  const [loadingMore, setLoadingMore] = useState(false);
-  const [newCount, setNewCount] = useState(0);
-  const pendingScrollRestore = useRef<number | null>(null);
-  const isFetchingRef = useRef(false);
-  const fetchControllerRef = useRef<AbortController | null>(null);
-  // Latest posts (for stale-closure-free comparison) + the pre-fetched first
-  // page behind the "N new posts" pill, applied instantly when tapped.
-  const postsRef = useRef<PostData[]>([]);
+  const { posts, newCount, loading, fetching, error, refresh, showNew, actions } = useClientTimeline();
+
+  const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refresh, fetching);
+
+  // Compose success and bottom-nav tap-on-active-tab both ask the feed to reload.
   useEffect(() => {
-    postsRef.current = posts;
-  }, [posts]);
-  const pendingRef = useRef<{ posts: PostData[]; nextCursor: string | null } | null>(null);
+    function onCreated() { setTimeout(refresh, 1000); }
+    function onRefresh() { refresh(); }
+    window.addEventListener("posts:created", onCreated);
+    window.addEventListener("feed:refresh", onRefresh);
+    return () => {
+      window.removeEventListener("posts:created", onCreated);
+      window.removeEventListener("feed:refresh", onRefresh);
+    };
+  }, [refresh]);
 
-  const fetchTimeline = useCallback(async (cursor?: string) => {
-    const params = new URLSearchParams({ limit: "50" });
-    if (cursor) params.set("cursor", cursor);
-    const res = await fetch(`/api/timeline?${params}`);
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error);
-    return data;
-  }, []);
-
-  const refreshFeed = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
-    if (isFetchingRef.current) return;
-    isFetchingRef.current = true;
-    sessionStorage.removeItem("timeline_cache");
-    sessionStorage.removeItem("timeline_scroll");
-    if (!silent) setFetching(true);
-    setFetchError(null);
-
-    const controller = new AbortController();
-    fetchControllerRef.current = controller;
-    const timeout = setTimeout(() => controller.abort(), 15000);
-
-    try {
-      const res = await fetch("/api/timeline?limit=50", { signal: controller.signal });
-      if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
-        if (res.status === 401) {
-          setFetchError("Your session has expired. Please log out and log back in.");
-        } else {
-          console.error("Feed fetch error:", data.error);
-        }
-      } else {
-        const data = await res.json();
-        setPosts(data.posts);
-        setNextCursor(data.nextCursor);
-        // Feed is now current — drop any pending "new posts" pill.
-        pendingRef.current = null;
-        setNewCount(0);
-      }
-    } catch (err) {
-      console.error("Feed fetch error:", err);
-    } finally {
-      clearTimeout(timeout);
-      if (!silent) setFetching(false);
-      setLoading(false);
-      isFetchingRef.current = false;
-    }
-  }, []);
-
-  // On mobile PWA, setTimeout is suspended when backgrounded, so the 15s abort
-  // never fires. Abort any stuck fetch immediately when the app returns to foreground.
+  // No posts and nothing connected → send the user to onboarding (matches the
+  // previous server-backed behaviour).
   useEffect(() => {
-    function handleVisibilityChange() {
-      if (!document.hidden && isFetchingRef.current) {
-        fetchControllerRef.current?.abort();
-      }
-    }
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    return () => document.removeEventListener("visibilitychange", handleVisibilityChange);
-  }, []);
-
-  // After posting / tap-to-refresh: force a full platform fetch then refresh the
-  // UI. There's no periodic poll anymore — the streaming worker keeps the
-  // timeline warm and the SSE channel below pushes a nudge when there's
-  // something new; this force path is the explicit catch-up + own-post capture.
-  const forceRefresh = useCallback(async () => {
-    await fetch("/api/posts/heartbeat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ force: true }),
-    }).catch(() => {});
-    refreshFeed();
-  }, [refreshFeed]);
-
-  // Streaming nudge → fetch the first page and, if it contains posts newer than
-  // what's on screen, stash it behind a "N new posts" pill (no feed jump).
-  const checkForNew = useCallback(async () => {
-    if (document.hidden) return;
-    try {
-      const data = await fetchTimeline();
-      const current = postsRef.current;
-      const currentKeys = new Set(current.map((p) => `${p.platform}-${p.id}`));
-      const topPostedAt = current[0]?.postedAt;
-      const fresh = (data.posts as PostData[]).filter(
-        (p) =>
-          !currentKeys.has(`${p.platform}-${p.id}`) &&
-          (!topPostedAt || p.postedAt > topPostedAt),
-      );
-      if (fresh.length > 0) {
-        pendingRef.current = { posts: data.posts, nextCursor: data.nextCursor };
-        setNewCount(fresh.length);
-      }
-    } catch {
-      /* ignore — next nudge or refresh will catch up */
-    }
-  }, [fetchTimeline]);
-
-  useRealtimeUpdates((channel) => {
-    if (channel === "timeline") checkForNew();
-  });
-
-  const showNewPosts = useCallback(() => {
-    const pending = pendingRef.current;
-    if (pending) {
-      setPosts(pending.posts);
-      setNextCursor(pending.nextCursor);
-      pendingRef.current = null;
-    }
-    setNewCount(0);
-    sessionStorage.removeItem("timeline_scroll");
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  }, []);
-
-  // Refresh after a successful compose. AppLayout owns the modal, so we
-  // can't call onPosted directly — listen for the event it dispatches.
-  useEffect(() => {
-    function handler() { setTimeout(forceRefresh, 1000); }
-    window.addEventListener("posts:created", handler);
-    return () => window.removeEventListener("posts:created", handler);
-  }, [forceRefresh]);
-
-  // Bottom-nav tap-on-active-tab: AppHeader dispatches feed:refresh after
-  // scrolling to the top, and we run the heartbeat-busting forceRefresh
-  // so the user sees something genuinely new.
-  useEffect(() => {
-    function handler() { forceRefresh(); }
-    window.addEventListener("feed:refresh", handler);
-    return () => window.removeEventListener("feed:refresh", handler);
-  }, [forceRefresh]);
-
-  const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refreshFeed, fetching);
-
-  useEffect(() => {
-    if (posts.length > 0) {
-      sessionStorage.setItem("timeline_cache", JSON.stringify({ posts, nextCursor }));
-    }
-  }, [posts, nextCursor]);
-
-  useEffect(() => {
-    let timer: ReturnType<typeof setTimeout>;
-    function handleScroll() {
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        sessionStorage.setItem("timeline_scroll", String(window.scrollY));
-      }, 100);
-    }
-    window.addEventListener("scroll", handleScroll, { passive: true });
-    return () => { clearTimeout(timer); window.removeEventListener("scroll", handleScroll); };
-  }, []);
-
-  useEffect(() => {
-    const cached = sessionStorage.getItem("timeline_cache");
-    if (cached) {
-      try {
-        const { posts: cachedPosts, nextCursor: cachedCursor } = JSON.parse(cached);
-        if (cachedPosts?.length > 0) {
-          setPosts(cachedPosts);
-          setNextCursor(cachedCursor);
-          setLoading(false);
-          const savedScroll = sessionStorage.getItem("timeline_scroll");
-          if (savedScroll) pendingScrollRestore.current = parseInt(savedScroll);
-          // Still kick off a background refresh so navigating in shows the
-          // latest posts; cached content paints first so there's no flicker.
-          // Silent — pull-to-refresh remains the only thing that surfaces
-          // the "Fetching..." indicator.
-          refreshFeed({ silent: true });
-          return;
-        }
-      } catch { /* fall through */ }
-    }
-    const timer = setTimeout(refreshFeed, 500);
-    return () => clearTimeout(timer);
-  }, [refreshFeed]);
-
-  useEffect(() => {
-    if (!loading && posts.length === 0) {
-      router.replace("/settings");
-    }
+    if (!loading && posts.length === 0) router.replace("/settings");
   }, [loading, posts.length, router]);
-
-  useLayoutEffect(() => {
-    if (pendingScrollRestore.current !== null && posts.length > 0) {
-      window.scrollTo(0, pendingScrollRestore.current);
-      pendingScrollRestore.current = null;
-    }
-  }, [posts]);
-
-  async function loadMore() {
-    if (!nextCursor || loadingMore) return;
-    setLoadingMore(true);
-    try {
-      const data = await fetchTimeline(nextCursor);
-      setPosts((prev) => [...prev, ...data.posts]);
-      setNextCursor(data.nextCursor);
-    } catch (err) {
-      console.error("Load more error:", err);
-    } finally {
-      setLoadingMore(false);
-    }
-  }
 
   return (
     <AppLayout>
@@ -284,7 +54,7 @@ export default function TimelinePage() {
 
       {newCount > 0 && (
         <div className="new-posts-pill-wrap">
-          <button className="new-posts-pill" onClick={showNewPosts}>
+          <button className="new-posts-pill" onClick={showNew}>
             ↑ {newCount} new {newCount === 1 ? "post" : "posts"}
           </button>
         </div>
@@ -294,30 +64,22 @@ export default function TimelinePage() {
         <p className="text-muted" style={{ textAlign: "center", padding: "4px 0", fontSize: "0.85em" }}>Fetching posts...</p>
       )}
 
-      {fetchError && (
+      {error && (
         <p className="text-muted" style={{ textAlign: "center", padding: "8px 0", color: "var(--color-error, #c0392b)" }}>
-          {fetchError}{" "}
-          {fetchError.includes("expired") && (
-            <button onClick={async () => { await fetch("/api/auth/logout", { method: "POST" }); window.location.href = "/login"; }} style={{ background: "none", border: "none", padding: 0, color: "inherit", textDecoration: "underline", cursor: "pointer" }}>Log out</button>
-          )}
+          {error}
         </p>
       )}
 
       {loading && <div className="spinner-container"><div className="spinner" /></div>}
 
       {!loading && (
-        <div className="timeline-feed">
-          {posts.map((post) => (
-            <PostCard key={`${post.platform}-${post.id}`} post={post} />
-          ))}
-          {nextCursor && (
-            <div className="load-more">
-              <button onClick={loadMore} disabled={loadingMore} className="btn btn-outline load-more-btn">
-                {loadingMore ? "Loading..." : "Load more"}
-              </button>
-            </div>
-          )}
-        </div>
+        <ClientActionsContext.Provider value={actions}>
+          <div className="timeline-feed">
+            {posts.map((post) => (
+              <PostCard key={`${post.platform}-${post.platformPostId}`} post={post} />
+            ))}
+          </div>
+        </ClientActionsContext.Provider>
       )}
     </AppLayout>
   );

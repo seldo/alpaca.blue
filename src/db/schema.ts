@@ -75,61 +75,9 @@ export const platformIdentities = mysqlTable(
   ]
 );
 
-// Cached posts from any platform
-export const posts = mysqlTable(
-  "posts",
-  {
-    id: int("id").primaryKey().autoincrement(),
-    userId: int("user_id")
-      .references(() => users.id, { onDelete: "cascade" })
-      .notNull(),
-    isTimeline: boolean("is_timeline").notNull().default(false),
-    isMention: boolean("is_mention").notNull().default(false),
-    platformIdentityId: int("platform_identity_id")
-      .references(() => platformIdentities.id, { onDelete: "cascade" })
-      .notNull(),
-    platform: varchar("platform", { length: 50 }).notNull(),
-    platformPostId: varchar("platform_post_id", { length: 255 }).notNull(),
-    platformPostCid: varchar("platform_post_cid", { length: 255 }),
-    postUrl: text("post_url"),
-    content: text("content"),
-    contentHtml: text("content_html"),
-    media: json("media"),
-    replyToId: varchar("reply_to_id", { length: 255 }),
-    threadRootId: varchar("thread_root_id", { length: 255 }),
-    threadRootCid: varchar("thread_root_cid", { length: 255 }),
-    repostOfId: varchar("repost_of_id", { length: 255 }),
-    quotedPost: json("quoted_post"),
-    linkCard: text("link_card"),
-    likeCount: int("like_count").default(0),
-    repostCount: int("repost_count").default(0),
-    replyCount: int("reply_count").default(0),
-    // Set when the logged-in user has already liked / reposted this post —
-    // either through alpaca.blue or another client. Sourced from the
-    // platform's viewer-relative fields (viewer.like / favourited).
-    viewerLiked: boolean("viewer_liked").default(false),
-    viewerReposted: boolean("viewer_reposted").default(false),
-    postedAt: timestamp("posted_at").notNull(),
-    fetchedAt: timestamp("fetched_at").defaultNow().notNull(),
-    dedupeHash: varchar("dedupe_hash", { length: 64 }),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-  },
-  (table) => [
-    uniqueIndex("platform_post_user_idx").on(
-      table.userId,
-      table.platform,
-      table.platformPostId,
-    ),
-    index("identity_posted_idx").on(
-      table.platformIdentityId,
-      table.postedAt
-    ),
-    index("dedupe_hash_idx").on(table.dedupeHash),
-    index("posted_at_idx").on(table.postedAt),
-    index("user_timeline_posted_idx").on(table.userId, table.isTimeline, table.postedAt),
-    index("user_mention_posted_idx").on(table.userId, table.isMention, table.postedAt),
-  ]
-);
+// NOTE: posts are no longer cached server-side — the client fetches, dedups,
+// and stores them in IndexedDB. The `posts` table (and `cross_post_mirrors`)
+// remain in the database as orphans and can be dropped manually.
 
 // Candidate matches between platform identities, staged for review
 export const matchSuggestions = mysqlTable(
@@ -162,33 +110,6 @@ export const matchSuggestions = mysqlTable(
       table.mastodonIdentityId
     ),
     index("suggestion_status_idx").on(table.status),
-  ]
-);
-
-// Records URL-only mirror posts created when the user reposts cross-platform.
-// Lets the timeline merge fold the bare-URL mirror into the original instead
-// of showing both as separate posts.
-export const crossPostMirrors = mysqlTable(
-  "cross_post_mirrors",
-  {
-    id: int("id").primaryKey().autoincrement(),
-    userId: int("user_id")
-      .references(() => users.id, { onDelete: "cascade" })
-      .notNull(),
-    originalPostId: int("original_post_id")
-      .references(() => posts.id, { onDelete: "cascade" })
-      .notNull(),
-    mirrorPlatform: varchar("mirror_platform", { length: 50 }).notNull(),
-    mirrorPlatformPostId: varchar("mirror_platform_post_id", { length: 512 }).notNull(),
-    createdAt: timestamp("created_at").defaultNow().notNull(),
-  },
-  (table) => [
-    uniqueIndex("mirror_user_platform_post_idx").on(
-      table.userId,
-      table.mirrorPlatform,
-      table.mirrorPlatformPostId
-    ),
-    index("mirror_original_idx").on(table.originalPostId),
   ]
 );
 
