@@ -4,11 +4,6 @@
 
 import type { ClientPost, CrossPost } from "./types";
 
-// Content shorter than this (after normalization) is too generic to dedupe
-// across different authors — e.g. "lol", "+1". Such posts still get a hash but
-// only merge when posted by the same author.
-export const DEDUP_SHORT_THRESHOLD = 20;
-
 function normalizeForDedup(content: string): string {
   return content
     .toLowerCase()
@@ -32,10 +27,6 @@ export async function computeDedupeHash(content: string): Promise<string | null>
   return hex.slice(0, 16);
 }
 
-export function isShortDedupContent(content: string): boolean {
-  return normalizeForDedup(content).length < DEDUP_SHORT_THRESHOLD;
-}
-
 // Computes + assigns dedupe hashes for a batch of freshly-mapped posts (async,
 // WebCrypto). Mutates in place and returns the same array so callers can chain
 // into the store + merge. Shared by the Mastodon and Bluesky fetchers.
@@ -48,17 +39,22 @@ export async function attachDedupeHashes(posts: ClientPost[]): Promise<ClientPos
   return posts;
 }
 
-// Identifies the author of a post for short-content dedup. Resolved persons
-// collapse across platforms via personId; everyone else gets a per-handle key
-// that can't match across platforms. (The current user's own accounts collapse
-// once person enrichment lands; for now they key by handle like anyone else.)
+// Identifies the author for dedup. Resolved persons collapse across platforms
+// via personId; everyone else gets a per-handle key that can't match across
+// platforms. (The current user's own accounts collapse once person enrichment
+// lands; for now they key by handle like anyone else.)
 function authorKeyFor(post: ClientPost): string {
   if (post.person?.id) return `p:${post.person.id}`;
   return `h:${post.author?.handle ?? "?"}`;
 }
 
-function dedupSeenKey(hash: string, content: string | null, post: ClientPost): string {
-  return isShortDedupContent(content ?? "") ? `${hash}|${authorKeyFor(post)}` : hash;
+// Cross-posts only collapse when we're confident it's the same author: the hash
+// alone isn't enough, because two different accounts (or a fediverse bridge)
+// posting identical text would otherwise be mislabeled as "Also on …". So we
+// always gate on the author key — for cross-platform merges that means the two
+// identities must be linked to the same resolved person.
+function dedupSeenKey(hash: string, post: ClientPost): string {
+  return `${hash}|${authorKeyFor(post)}`;
 }
 
 function crossPostOf(post: ClientPost): CrossPost {
@@ -73,17 +69,17 @@ function crossPostOf(post: ClientPost): CrossPost {
 }
 
 // Collapses cross-posted content into a single entry carrying `alsoPostedOn`.
-// `posts` must be pre-sorted newest-first. Mirrors queryTimeline's merge: long
-// posts merge on hash alone; short posts only merge within the same author.
-// When a pair collides, the side with a native quoted post wins so the renderer
-// can show the inline quote card instead of a bare URL.
+// `posts` must be pre-sorted newest-first. Posts merge only when both the
+// normalized-text hash and the author key match (see dedupSeenKey). When a pair
+// collides, the side with a native quoted post wins so the renderer can show the
+// inline quote card instead of a bare URL.
 export function mergeTimeline(posts: ClientPost[]): ClientPost[] {
   const seen = new Map<string, number>();
   const result: ClientPost[] = [];
 
   for (const post of posts) {
     const hash = post.dedupeHash;
-    const seenKey = hash ? dedupSeenKey(hash, post.content, post) : null;
+    const seenKey = hash ? dedupSeenKey(hash, post) : null;
 
     if (seenKey && seen.has(seenKey)) {
       const idx = seen.get(seenKey)!;
