@@ -5,14 +5,25 @@
 
 Unified social reader that merges Bluesky and Mastodon into a single chronological timeline with cross-platform identity resolution. Multi-user, with Bluesky OAuth login.
 
+## Architecture (read this first)
+
+**All post fetching, dedup/merge, realtime, and writes happen in the browser**, talking
+directly to Bluesky (the user's PDS over CORS-enabled XRPC) and Mastodon. The server is
+deliberately minimal: auth/session, identity matching + the identity-map download,
+alt-text + link-card metadata (the CORS-bound bits), and credential brokering. There is
+**no** server-side post cache, timeline route, heartbeat, or streaming worker anymore —
+those were removed in the client-fetching refactor. When something looks server-shaped
+(a fetch loop, a posts table), assume it's been moved client-side and check `src/lib/client/`.
+
 ## Tech Stack
 
 - **Framework:** Next.js (App Router, TypeScript)
-- **Database:** MariaDB 11.8 on AWS RDS, via Drizzle ORM (mysql2 driver)
-- **Auth:** Bluesky OAuth login (fully server-side, DPoP keys stored in Redis via @atproto/oauth-client-node), iron-session for encrypted cookie sessions
-- **Mastodon:** OAuth (server-side, per-instance app registration) for connecting Mastodon accounts after login
+- **Database:** MariaDB 11.8 on AWS RDS, via Drizzle ORM (mysql2 driver) — identities/persons/matching only; no post cache
+- **Auth:** Bluesky OAuth login is server-side (`@atproto/oauth-client-node`, DPoP keys in Redis); iron-session cookie. After login the browser fetches Bluesky directly using **brokered credentials** (see Bluesky OAuth Notes).
+- **Mastodon:** OAuth (server-side app registration) to connect; afterward the browser calls the instance directly with the bearer token.
 - **Identity Resolution:** Heuristic pre-filtering + Claude LLM (Anthropic API)
-- **Cache:** Upstash Redis (serverless REST API via `@upstash/redis`) — debouncing, timeline caching, reactions caching
+- **Client data layer:** `src/lib/client/` — direct platform fetch, WebCrypto DPoP signing (secp256k1 via `@noble/curves`), dedup/merge, IndexedDB store, WSS+poll realtime.
+- **Cache:** Upstash Redis (serverless REST via `@upstash/redis`) — now **only** Bluesky OAuth state/session + an identity profile-refresh debounce.
 - **Styling:** Plain CSS (no Tailwind), light theme, Work Sans font, alpaca.blue brand colors
 - **PWA:** manifest.json with app icons for home screen installation
 - **Hosting:** Netlify at alpaca.blue
@@ -41,55 +52,55 @@ src/
       auth/me/route.ts                 # GET current user info (avatar, handle, display name, blueskyDid)
       auth/logout/route.ts             # POST clear session
       client-metadata/route.ts         # AT Protocol OAuth client metadata (redirect_uri: /api/auth/bluesky/callback)
-      accounts/route.ts                # List connected accounts for current user
+      accounts/route.ts                # List connected accounts (profile metadata for the header)
+      accounts/credentials/route.ts    # GET → hand the browser its Mastodon {instanceUrl, accessToken}
+      accounts/disconnect/route.ts     # POST {platform} → disconnect mastodon / wipe all
+      ai/describe-image/route.ts       # POST FormData{file} → Claude Haiku vision alt text
       bluesky/
-        like/route.ts                  # POST {uri, cid} → agent.like()
-        repost/route.ts                # POST {uri, cid} → agent.repost()
-        post/route.ts                  # POST {text, replyTo?, replyRoot?, quote?, images?} → RichText.detectFacets → agent.post()
-        upload-blob/route.ts           # POST FormData{file} → agent.uploadBlob() → {blob}
-        author-feed/route.ts           # GET ?cursor= → agent.getAuthorFeed()
+        credentials/route.ts           # GET → brokered {did, pdsUrl, accessToken, dpopPrivateJwk} for direct PDS calls
+        credentials/refresh/route.ts   # POST → server-side (locked) token refresh → fresh accessToken
+        link-card/route.ts             # GET ?url= → OG metadata + thumb bytes (CORS-bound fetch the browser can't do)
       mastodon/
-        reply/route.ts                 # POST {statusId, content} → reply to Mastodon status by ID
+        route.ts + callback/route.ts   # Mastodon OAuth connect
       graph/
-        import/route.ts               # Import follows from either platform (server-side for both)
+        import/route.ts                # Import follows from either platform (feeds matching; uses server Bluesky agent)
         identities/
-          route.ts                     # GET persons + linked identities
+          route.ts                     # GET persons + linked identities — the identity-map download the client caches
           resolve/route.ts             # POST trigger resolution pipeline
           suggestions/route.ts         # GET/POST pending match suggestions
           link/route.ts                # POST manual identity link
           unlink/route.ts              # POST unlink identity from person
-      posts/
-        heartbeat/route.ts             # POST — triggered every 7s by client; fetches all platforms if debounce expired
-        fetch/route.ts                 # POST — legacy full fetch+return (still used by manual refresh paths)
-        create/route.ts                # POST {content, mediaIds?} → post to Mastodon
-        upload-media/route.ts          # POST FormData{file} → Mastodon /api/v1/media → {id}
-        lookup/route.ts                # POST find/create post by platform URI
-        [id]/route.ts                  # GET single post with cross-post lookup
-      reactions/
-        fetch/route.ts                 # POST — fetches reactions from both platforms server-side (cached 60s)
-      timeline/route.ts               # GET merged deduplicated timeline (supports ?type=mentions); reads from Redis/DB only
-      persons/[id]/posts/route.ts     # GET posts for a specific person
-      profile/posts/route.ts          # POST fetch+store own posts from all platforms; GET cursor pagination
+      identities/[id]/refresh/route.ts # POST → re-fetch an identity's avatar/profile (Avatar fallback; server agent)
   components/
-    AppHeader.tsx                      # App layout: sidebar nav + mobile bottom bar
-    BlueskyConnect.tsx                 # Bluesky OAuth connect form (unused — login handles this)
-    MastodonConnect.tsx                # Mastodon instance URL / handle form
-    ConnectedAccount.tsx               # Account row with import/reconnect buttons
-    PostCard.tsx                       # Post card with images, quotes, links, image modal, reply/repost/like
-    CreatePost.tsx                     # Compose UI: text + images (with ALT text), cross-posts to both platforms
-    PersonCard.tsx                     # Person card with linked identities
-    SuggestionCard.tsx                 # Identity match suggestion card
+    AppHeader.tsx                      # App layout: sidebar nav + mobile bottom bar + global compose modal
+    PostCard.tsx                       # Post card; reactions/quote nav via ClientActionsContext
+    CreatePost.tsx                     # Compose UI (always client): text + images (ALT), cross-posts to both platforms
+    Avatar.tsx                         # Avatar with broken-URL refresh via /api/identities/[id]/refresh
+    PersonCard.tsx / SuggestionCard.tsx / MastodonConnect.tsx / ConnectedAccount.tsx
   lib/
-    bluesky-server.ts                  # NodeOAuthClient (server-side), Redis state/session stores, getServerBlueskyAgent()
-    bluesky.ts                         # Server-side Bluesky follow storage
-    mastodon.ts                        # Mastodon OAuth + follow import + mentions fetch
+    client/                            # ── THE CLIENT DATA LAYER (most fetching lives here) ──
+      bluesky.ts                       #   BlueskyClient: WebCrypto DPoP fetch to the PDS; timeline/mentions/author/
+                                       #   profile/thread/reactions; like/repost/post/uploadBlob/follow
+      mastodon.ts                      #   Direct token-auth fetch: timelines, mentions, statuses, reactions, thread,
+                                       #   favourite/reblog/post/media/follow, credentials
+      transform.ts / transform-bluesky.ts  # Pure mappers (status/feed-item → ClientPost), facets→HTML
+      dedup.ts                         #   WebCrypto dedup hash + cross-post merge (+ attachDedupeHashes)
+      store.ts                         #   IndexedDB per-feed store (timeline/mentions/profile)
+      realtime.ts                      #   Mastodon WSS user stream + Bluesky polling
+      identities.ts                    #   Cached person/identity map; enrichAuthor/enrichReactor; fetchPostsForIdentity
+      actions.ts + ClientActionsContext.ts  # like/repost (+ cross-platform fanout); context PostCard reads
+      useClientTimeline.ts / useClientFeed.ts  # Feed hooks: fetch → store → merge → "N new" pill
+      types.ts                         #   ClientPost shape (PostCard-compatible)
+    bluesky-server.ts                  # NodeOAuthClient (server), Redis state/session, getServerBlueskyAgent(), getBrokeredBlueskyCredentials()
+    bluesky.ts                         # Server-side Bluesky follow storage (matching import)
+    mastodon.ts                        # Mastodon OAuth + follow import
     identity-resolution.ts             # Heuristic + LLM identity matching
-    posts.ts                           # Post storage, dedup hashing, server-side Bluesky/Mastodon fetch functions
-    redis.ts                           # Upstash Redis client + cache key constants + TTLs
-    session.ts                         # iron-session config (SessionData, getSession, requireSession)
-    usePullToRefresh.ts                # Hook: pull-to-refresh via touch drag + wheel overscroll
+    link-preview.ts                    # OG metadata + thumb-bytes fetch for /api/bluesky/link-card
+    redis.ts                           # Upstash Redis client + KEY_PREFIX
+    session.ts                         # iron-session config
+    usePullToRefresh.ts                # Hook: pull-to-refresh
   db/
-    schema.ts                          # Drizzle schema (users, connectedAccounts, platformIdentities, persons, posts, matchSuggestions)
+    schema.ts                          # Drizzle schema (users, connectedAccounts, platformIdentities, persons, matchSuggestions)
     index.ts                           # DB connection (mysql2 pool with SSL)
 public/
   manifest.json                        # PWA manifest
@@ -103,54 +114,51 @@ public/
 
 ## How It Works
 
-- **Authentication:** Bluesky OAuth is the login mechanism. Users connect an optional Mastodon account after login. All accounts are isolated per-user via `userId` foreign keys.
-- **Post fetching:** A client-side heartbeat fires every 7 seconds. The server fetches from Bluesky and Mastodon if the per-platform debounce (30s) has expired, stores posts in DB, and updates the Redis cache. Pull-to-refresh reads from Redis/DB only — it never hits platform APIs directly.
-- **Deduplication:** Cross-posted content is deduplicated via SHA-256 hash of normalized text (stripped URLs, 5-min time window).
-- **Timeline:** Merged, deduplicated, cursor-paginated feed from both platforms. First page is cached in Redis (60s TTL).
-- **Mentions:** Bluesky notifications (replies, quotes, mentions) + Mastodon mentions merged into a single feed. Same heartbeat/cache model as timeline.
-- **Reactions:** Likes, reposts, follows fetched server-side and cached (60s). Like/repost/reply actions POST to API routes which call the Bluesky agent server-side.
-- **Cross-posting:** New posts are sent to both Bluesky and Mastodon simultaneously. Images are compressed client-side (iterative JPEG quality reduction until under 950KB for Bluesky's 1MB limit) and ALT text is captured per image. After posting, the heartbeat is force-triggered (busts all debounce and cache keys) then a full UI refresh reads the updated cache.
-- **Cross-platform replies:** When replying to a post that appears on both platforms (`alsoPostedOn`), the reply is sent to both platforms simultaneously via `Promise.allSettled`. Enables cross-platform threads.
-- **Thread replies:** Posts store `thread_root_id`/`thread_root_cid` (from `record.reply.root` in the Bluesky feed). Replies pass these as the AT Protocol `root` ref so nested replies thread correctly in Bluesky. The `alsoPostedOn` array also carries `platformPostId`/`platformPostCid`/`threadRootId`/`threadRootCid` for the same reason.
-- **Profile feed:** The user's own posts from both platforms, deduplicated the same way as the timeline. Cross-posts collapsed into one entry with `alsoPostedOn`.
-- **Identity resolution:** Heuristic scoring (bio cross-links, handle similarity, display name, verified domains) → LLM batch evaluation (Claude API) → auto-confirm ≥0.9, pending 0.5–0.9, rejected <0.5. Persons group linked identities across platforms.
-- **Rich text:** When posting to Bluesky, `RichText.detectFacets(agent)` auto-detects URLs (including bare domains), @-mentions, and #hashtags and generates the `facets` array. Stored Bluesky posts have facets rendered to HTML server-side. Mastodon handles linkification server-side — plain text is sufficient.
-- **State preservation:** Timeline scroll position and feed cache stored in sessionStorage for instant back-navigation.
-- **PWA:** Installable as a home screen app via manifest.json. Stuck fetches are aborted on `visibilitychange` to handle iOS PWA backgrounding.
+- **Authentication:** Bluesky OAuth is the login mechanism (server-side). Users connect an optional Mastodon account after login. All accounts are isolated per-user via `userId` foreign keys.
+- **Post fetching (client):** Feed hooks (`useClientTimeline`, `useClientFeed`) fetch from both platforms in the browser → map to `ClientPost` → dedup/merge → store in IndexedDB → render. Cold loads paint instantly from IndexedDB, then refresh. No server fetch, no DB cache.
+- **Deduplication (client):** `dedup.ts` — SHA-256 of normalized text via WebCrypto (bit-identical to the old Node hash). Cross-posts collapse into one entry with `alsoPostedOn`; short posts only merge within the same resolved person.
+- **Realtime (client):** Mastodon over its WSS `user` stream; Bluesky by polling `getTimeline`/`listNotifications` (~25–30s). New arrivals are stashed behind an "N new posts" pill. (Matches what each platform's own web client does.)
+- **Mentions:** Bluesky notifications (mention/reply/quote, hydrated via `getPosts`) + Mastodon mentions, **plus** reaction notifications (likes/reposts/follows via `groupReactions`) interleaved by time.
+- **Reactions/writes (client):** like/repost go through `ClientActionsContext` → `actions.ts` → the platform directly, with native cross-platform fanout. PostCard has no server-route fallback.
+- **Cross-posting:** New posts go to both platforms simultaneously from the browser. Images compressed client-side (JPEG quality reduction under 950KB for Bluesky's 1MB limit), ALT captured per image. After posting, a `posts:created` event nudges the active feed to refresh.
+- **Bluesky rich text (client):** `RichText.detectFacets` runs in the browser (mentions resolved via `resolveHandle`); bare-link posts get a preview card whose OG metadata comes from `/api/bluesky/link-card` but whose thumb blob is uploaded with the user's own DPoP creds.
+- **Thread replies:** Posts carry `threadRootId`/`threadRootCid`; replies pass them as the AT Proto `root` ref. `alsoPostedOn` carries per-platform ids/cids so a reply/repost fans out to both sides.
+- **Post detail (`/posts/[id]`):** keyed by `"<platform>:<platformPostId>"` (URL-encoded); the client fetches the thread (Bluesky `getPostThread` / Mastodon `/context`). No numeric DB ids anymore.
+- **Identity map:** `/api/graph/identities` is downloaded once and cached (`identities.ts`); it enriches post authors + reactors (links to `/persons/:id` or `/identities/:id`) and drives person-based cross-platform dedup.
+- **Identity resolution:** Heuristic scoring → LLM batch eval (Claude) → auto-confirm ≥0.9, pending 0.5–0.9, rejected <0.5. Persons group linked identities across platforms.
+- **PWA:** Installable via manifest.json.
 
 ## Bluesky OAuth Notes
 
-- All Bluesky operations are **fully server-side** using `@atproto/oauth-client-node`. There is no browser-side Bluesky agent.
-- OAuth flow: browser POSTs handle to `/api/auth/bluesky/authorize` → server returns redirect URL → browser redirects → Bluesky redirects to `/api/auth/bluesky/callback` → server completes OAuth, creates/finds user, sets iron-session.
-- DPoP keys are stored as serialized JWK in Redis (`bluesky:state:{key}` with 10min TTL for OAuth state, `bluesky:session:{key}` with no TTL for sessions).
-- `getServerBlueskyAgent(userId)` in `bluesky-server.ts` looks up the user's `blueskyDid` from DB, then calls `client.restore(did)` to get a valid agent with automatic token refresh.
-- Access tokens expire after ~2 hours. `restore()` automatically uses the refresh token (90-day sliding window). Bluesky uses one-time-use refresh tokens that rotate on each use.
-- `requestLocalLock` from `@atproto/oauth-client` prevents concurrent token refresh races.
-- **`APP_URL` env var** is required for server-side OAuth: must be the full origin (e.g. `http://127.0.0.1:3000` for dev, `https://alpaca.blue` for prod). Used to build the redirect URI.
-- For localhost dev, the CIMD service (cimd-service.fly.dev) registers OAuth clients dynamically. The registered `client_id` is cached in Redis to avoid re-registration on every cold start.
+- **Login** is server-side (`@atproto/oauth-client-node`): browser POSTs handle to `/api/auth/bluesky/authorize` → redirect → `/api/auth/bluesky/callback` completes OAuth, creates/finds user, sets iron-session. DPoP keys stored as JWK in Redis (`bluesky:state:{key}` 10min TTL; `bluesky:session:{did}` no TTL).
+- **Data access is brokered, not server-side.** `getBrokeredBlueskyCredentials(userId)` reads the Redis session and hands the browser `{ did, pdsUrl (=tokenSet.aud), accessToken, dpopPrivateJwk }` via `/api/bluesky/credentials`. The browser signs its own DPoP proofs (`src/lib/client/bluesky.ts`) and calls the PDS directly.
+  - **Bluesky issues secp256k1 (ES256K) DPoP keys** — WebCrypto can't sign those, so we use `@noble/curves`. (P-256 falls back to WebCrypto.)
+  - **Refresh ownership is split:** the server owns refresh (rare, serialized by the distributed Redis lock so Bluesky's one-time refresh token can't be double-spent); the browser owns reads and calls `/api/bluesky/credentials/refresh` on a 401. The refresh token never leaves the server.
+  - First PDS request per session 401s with `use_dpop_nonce` and silently retries with the nonce — that's the normal DPoP handshake, not an error.
+- `getServerBlueskyAgent(userId)` still exists for the few remaining server Bluesky needs: follow import (`graph/import`) and avatar refresh (`identities/[id]/refresh`).
+- `getNodeOAuthClient()` is a singleton; init failures must NOT be cached (a poisoned rejected promise blocks all later requests until restart — see the `.then(onFulfilled, onRejected)` clearing `_clientInitPromise`).
+- **`APP_URL`** must be the full origin (`http://127.0.0.1:3000` dev — loopback IP, not `localhost`; `https://alpaca.blue` prod). Browse to the same origin you set, or the OAuth callback/cookie origins mismatch.
+- For localhost dev, the CIMD service (cimd-service.fly.dev) registers OAuth clients dynamically; the `client_id` is cached in Redis.
+
+## Security tradeoff (conscious)
+
+The brokered Bluesky access token + DPoP key and the Mastodon bearer token are exposed to client JS — a larger XSS blast radius than fully-server-side, accepted in exchange for direct client fetching. Refresh tokens stay server-side.
 
 ## Redis Notes
 
-- Uses **Upstash Redis** (REST API, `@upstash/redis`) — suitable for Netlify serverless, no TCP connection needed.
-- Configured in `src/lib/redis.ts` with cache key constants and TTL constants.
-- Current cache uses:
-  - **Bluesky OAuth state** (`bluesky:state:{key}`, 10min TTL) — NodeOAuthClient state store
-  - **Bluesky OAuth sessions** (`bluesky:session:{did}`, no TTL) — NodeOAuthClient session store (DPoP keys as JWK)
-  - **Bluesky fetch debounce** (`bluesky:fetched:{userId}:{timeline|mentions}`, 30s TTL) — prevents rapid duplicate Bluesky API calls
-  - **Bluesky reactions cache** (`bluesky:reactions:{userId}`, 60s TTL)
-  - **Mastodon fetch debounce** (`mastodon:fetched:{userId}:{timeline|mentions}`, 30s TTL) — prevents rapid duplicate Mastodon API calls
-  - **Timeline/mentions first-page cache** (`timeline:cache:{userId}:{timeline|mentions}`, 60s TTL) — caches first page (no cursor) of results including `nextCursor`
-  - **Mastodon reactions cache** (`mastodon:reactions:{userId}`, 60s TTL)
-- Cache is invalidated (`redis.del`) when new posts are stored.
-- All non-OAuth Redis calls use `.catch(() => {})` to fail silently — Redis is non-critical for post data.
+- Uses **Upstash Redis** (REST API, `@upstash/redis`) — suitable for Netlify serverless. Client + `KEY_PREFIX` in `src/lib/redis.ts` (the old `keys`/`TTL` cache-key constants were removed with the post cache).
+- Remaining uses (all built inline with `KEY_PREFIX`):
+  - **Bluesky OAuth state** (`bluesky:state:{key}`, 10min TTL) and **sessions** (`bluesky:session:{did}`, no TTL) — NodeOAuthClient stores.
+  - **Distributed refresh lock** — serializes Bluesky token refresh across serverless instances.
+  - **Identity profile-refresh debounce** (`identity:profile_fetched:{id}`, 60s) — `identities/[id]/refresh`.
+- Non-OAuth Redis calls use `.catch(() => {})` to fail silently.
 
 ## Database Notes
 
 - drizzle-kit push has a bug with MariaDB 11.8 (`Cannot read properties of undefined`). Schema changes must be applied via direct SQL using mysql2.
-- Connection uses individual env vars (DATABASE_HOST, DATABASE_PORT, etc.), not a connection URL.
-- SSL enabled with `rejectUnauthorized: false` for RDS.
-- JSON columns (e.g. `quotedPost`) are stored as `longtext` — require manual `JSON.parse()` when reading.
-- All tables have a `userId` foreign key for multi-user isolation.
+- **`.env.local` points at the PRODUCTION DB** — any migration/DROP run locally hits prod. Be careful.
+- The `posts` and `cross_post_mirrors` tables are **no longer in the Drizzle schema** (posts are client-side now). They still exist in the prod DB as orphans — safe to `DROP` manually, nothing reads/writes them.
+- Connection uses individual env vars (DATABASE_HOST, etc.). SSL with `rejectUnauthorized: false`. JSON columns land as `longtext` (manual `JSON.parse()`). All tables have a `userId` FK.
 
 ## Environment Variables (.env.local)
 
