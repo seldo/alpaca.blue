@@ -138,6 +138,21 @@ export async function lookupMastodonAccount(
   return res.json();
 }
 
+// Resolves a status by its URL (any instance) via search, for cross-post mirror
+// targets. resolve=true makes the user's instance fetch a remote status.
+export async function searchMastodonStatus(
+  creds: MastodonCredentials,
+  url: string,
+): Promise<MastodonStatus | null> {
+  const res = await fetch(
+    `${creds.instanceUrl}/api/v2/search?q=${encodeURIComponent(url)}&resolve=true&type=statuses&limit=1`,
+    { headers: { Authorization: `Bearer ${creds.accessToken}` } },
+  );
+  if (!res.ok) return null;
+  const data = await res.json();
+  return (data.statuses || [])[0] ?? null;
+}
+
 // Fetches a status + its thread context (ancestors + descendants) for the
 // detail view.
 export async function fetchMastodonThread(

@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { Avatar } from "@/components/Avatar";
 import { useClientActions } from "@/lib/client/ClientActionsContext";
 import type { ClientPost } from "@/lib/client/types";
+import { detectMirror, resolveMirrorQuote } from "@/lib/client/mirrors";
 
 function ImageModal({
   images,
@@ -254,6 +255,10 @@ export function PostCard({ post }: { post: PostData }) {
   const [localRepostCount, setLocalRepostCount] = useState(post.repostCount || 0);
   const [reposting, setReposting] = useState(false);
   const [repostMenuOpen, setRepostMenuOpen] = useState(false);
+  // Cross-platform mirror: a post whose body is *only* a link to a post on the
+  // other platform is reconciled into a quote of that post (see mirrors.ts).
+  const [mirrorQuote, setMirrorQuote] = useState<NonNullable<PostData["quotedPost"]> | null>(null);
+  const isMirror = !post.quotedPost && detectMirror(post as unknown as ClientPost) !== null;
 
   const openImageModal = useCallback(
     (images: Array<{ url: string; alt: string }>, index: number, e: React.MouseEvent) => {
@@ -383,6 +388,19 @@ export function PostCard({ post }: { post: PostData }) {
       })
     );
   }
+
+  // Resolve a cross-platform mirror (bare link to the other platform) into a
+  // quote of the linked post. Cached by URL in mirrors.ts.
+  useEffect(() => {
+    if (post.quotedPost) return;
+    let cancelled = false;
+    resolveMirrorQuote(post as unknown as ClientPost)
+      .then((q) => {
+        if (!cancelled && q) setMirrorQuote(q as NonNullable<PostData["quotedPost"]>);
+      })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, [post]);
 
   // Close repost menu when clicking outside
   useEffect(() => {
@@ -522,13 +540,17 @@ export function PostCard({ post }: { post: PostData }) {
         </div>
       )}
 
-      <div className="post-content">
-        {post.contentHtml ? (
-          <div dangerouslySetInnerHTML={{ __html: post.contentHtml }} />
-        ) : post.content ? (
-          <div dangerouslySetInnerHTML={{ __html: linkifyText(post.content) }} />
-        ) : null}
-      </div>
+      {/* When the post is just a bare cross-platform link, hide the raw URL — the
+          quote card below stands in for it. */}
+      {!isMirror && (
+        <div className="post-content">
+          {post.contentHtml ? (
+            <div dangerouslySetInnerHTML={{ __html: post.contentHtml }} />
+          ) : post.content ? (
+            <div dangerouslySetInnerHTML={{ __html: linkifyText(post.content) }} />
+          ) : null}
+        </div>
+      )}
 
       {mediaItems.length > 0 && (() => {
         const imageItems = mediaItems
@@ -557,7 +579,7 @@ export function PostCard({ post }: { post: PostData }) {
         );
       })()}
 
-      {post.linkCard && (
+      {post.linkCard && !isMirror && (
         /\.gif(\?|$)/i.test(post.linkCard.url) ? (
           <a
             href={post.linkCard.url}
@@ -590,8 +612,8 @@ export function PostCard({ post }: { post: PostData }) {
         )
       )}
 
-      {post.quotedPost && post.quotedPost.authorHandle && (() => {
-        const qp = post.quotedPost;
+      {(post.quotedPost || mirrorQuote) && (post.quotedPost || mirrorQuote)!.authorHandle && (() => {
+        const qp = (post.quotedPost || mirrorQuote)!;
         const qpUrl = getQuotedPostUrl(qp);
         const qpPlatform = getQuotedPostPlatform(qp);
         // Mastodon handles are stored as "@user@instance" — strip the leading

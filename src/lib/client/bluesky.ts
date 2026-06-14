@@ -351,6 +351,19 @@ export class BlueskyClient {
     return attachDedupeHashes(items.map(mapBlueskyFeedItem));
   }
 
+  // Fetches a single post by AT URI (for resolving cross-post mirror targets).
+  async getPost(uri: string): Promise<ClientPost | null> {
+    const res = await this.request(
+      "GET",
+      `/xrpc/app.bsky.feed.getPosts?uris[]=${encodeURIComponent(uri)}`,
+    );
+    if (!res.ok) return null;
+    const post = ((await res.json()).posts || [])[0];
+    if (!post) return null;
+    const [cp] = await attachDedupeHashes([mapBlueskyFeedItem({ post })]);
+    return cp;
+  }
+
   // Fetches a post + its thread (ancestor chain + direct replies) for the detail
   // view. Returns mapped ClientPosts.
   async getPostThread(

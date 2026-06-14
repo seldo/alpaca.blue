@@ -1,13 +1,11 @@
-// Client-side write actions (Phase 4a: reactions). Dispatches like/repost to the
-// right platform, performs cross-platform fanout when a native mirror exists,
-// and patches the local store so optimistic state survives a reload. Mirrors
-// the behaviour of the server write routes + PostCard's fanout, minus the
-// bare-URL cross-post mirror (that needs the client mirror store — deferred).
+// Client-side write actions. Dispatches like/repost to the right platform,
+// performs cross-platform fanout, and patches the local store so optimistic
+// state survives a reload.
 
 import type { ClientPost } from "./types";
 import { storeKey } from "./types";
 import { BlueskyClient } from "./bluesky";
-import { mastodonFavourite, mastodonReblog, type MastodonCredentials } from "./mastodon";
+import { mastodonFavourite, mastodonReblog, mastodonPostStatus, type MastodonCredentials } from "./mastodon";
 import { patchPost } from "./store";
 
 export interface Clients {
@@ -53,22 +51,29 @@ export async function repostPost(
     result = await mastodonReblog(clients.mastodon, post.platformPostId, undo);
   }
 
-  // Cross-platform fanout (native only): if the post is also on the other
-  // platform, repost that mirror too. Best-effort — a failure here doesn't fail
-  // the primary repost.
+  // Cross-platform fanout (best-effort — a failure here doesn't fail the primary
+  // repost). If the post natively exists on the other platform, repost that
+  // copy. Otherwise post its URL there as a cross-post — which gets reconciled
+  // back into a quote of the original on read (see mirrors.ts).
   if (!undo) {
     const other = post.platform === "bluesky" ? "mastodon" : "bluesky";
     const mirror = post.alsoPostedOn?.find((p) => p.platform === other);
-    if (mirror) {
-      try {
+    try {
+      if (mirror) {
         if (other === "bluesky" && clients.bluesky && mirror.platformPostCid) {
           await clients.bluesky.repost(mirror.platformPostId, mirror.platformPostCid);
         } else if (other === "mastodon" && clients.mastodon) {
           await mastodonReblog(clients.mastodon, mirror.platformPostId, false);
         }
-      } catch (err) {
-        console.error("[actions] cross-platform repost fanout failed:", err);
+      } else if (post.postUrl) {
+        if (other === "bluesky" && clients.bluesky) {
+          await clients.bluesky.post({ text: post.postUrl });
+        } else if (other === "mastodon" && clients.mastodon) {
+          await mastodonPostStatus(clients.mastodon, { status: post.postUrl });
+        }
       }
+    } catch (err) {
+      console.error("[actions] cross-platform repost fanout failed:", err);
     }
   }
 
