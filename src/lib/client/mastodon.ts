@@ -81,7 +81,7 @@ export async function fetchMastodonReactions(
     type: string;
     created_at: string;
     account: { acct: string; display_name: string; username: string; avatar: string };
-    status?: { url: string; content: string } | null;
+    status?: { id: string; url: string; content: string } | null;
   }> = await res.json();
 
   return notifications
@@ -94,7 +94,7 @@ export async function fetchMastodonReactions(
       return {
         platform: "mastodon" as const,
         reactionType: reactionType as "like" | "repost" | "follow",
-        subjectId: null,
+        subjectId: n.status?.id ?? null,
         subjectExcerpt: n.status ? stripHtmlTags(n.status.content) : null,
         subjectUrl: n.status?.url ?? null,
         reactor: {
