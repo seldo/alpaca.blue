@@ -481,7 +481,8 @@ export class BlueskyClient {
     return attachDedupeHashes(mapped);
   }
 
-  // Fetches like/repost/follow notifications as RawReactions. Subject post text
+  // Fetches like/repost/follow notifications (plus likes/reposts of the viewer's
+  // reposts, the *-via-repost reasons) as RawReactions. Subject post text
   // (for like/repost) is hydrated via getPosts; subjectUrl points at the post on
   // bsky.app (we have no internal post id client-side). Reactor identity links
   // are left null — ReactionCard routes those through /identities/lookup.
@@ -495,40 +496,51 @@ export class BlueskyClient {
     const notifs = (data.notifications || []) as Array<{
       reason: string;
       reasonSubject?: string;
+      record?: { subject?: { uri?: string } };
       author: { did: string; handle: string; displayName?: string; avatar?: string };
       indexedAt: string;
     }>;
-    const reacts = notifs.filter(
-      (n) => n.reason === "like" || n.reason === "repost" || n.reason === "follow",
-    );
+    const reasons = new Set(["like", "repost", "follow", "like-via-repost", "repost-via-repost"]);
+    const reacts = notifs.filter((n) => reasons.has(n.reason));
+    // For *-via-repost, reasonSubject is the viewer's repost record; the post
+    // itself is the like/repost record's own subject.
+    const subjectOf = (n: (typeof reacts)[number]) =>
+      n.reason.endsWith("-via-repost") ? n.record?.subject?.uri : n.reasonSubject;
 
+    // Only post URIs: likes can also target starter packs / feeds / lists, and
+    // the appview 500s the whole getPosts batch if any URI isn't a post.
     const subjectUris = [
-      ...new Set(reacts.map((n) => n.reasonSubject).filter((u): u is string => !!u)),
-    ].slice(0, 25);
+      ...new Set(
+        reacts
+          .map(subjectOf)
+          .filter((u): u is string => !!u && u.includes("/app.bsky.feed.post/")),
+      ),
+    ];
     const subjects = new Map<string, { text: string; url: string }>();
-    if (subjectUris.length > 0) {
-      const qs = subjectUris.map((u) => `uris[]=${encodeURIComponent(u)}`).join("&");
+    for (let i = 0; i < subjectUris.length; i += 25) {
+      const qs = subjectUris.slice(i, i + 25).map((u) => `uris[]=${encodeURIComponent(u)}`).join("&");
       const r = await this.request("GET", `/xrpc/app.bsky.feed.getPosts?${qs}`);
-      if (r.ok) {
-        const pd = await r.json();
-        for (const p of pd.posts || []) {
-          const rkey = p.uri.split("/").pop();
-          subjects.set(p.uri, {
-            text: p.record?.text || "",
-            url: `https://bsky.app/profile/${p.author.handle}/post/${rkey}`,
-          });
-        }
+      if (!r.ok) continue;
+      const pd = await r.json();
+      for (const p of pd.posts || []) {
+        const rkey = p.uri.split("/").pop();
+        subjects.set(p.uri, {
+          text: p.record?.text || "",
+          url: `https://bsky.app/profile/${p.author.handle}/post/${rkey}`,
+        });
       }
     }
 
     return reacts.map((n) => {
-      const subj = n.reasonSubject ? subjects.get(n.reasonSubject) : undefined;
+      const subjectId = subjectOf(n) ?? null;
+      const subj = subjectId ? subjects.get(subjectId) : undefined;
       return {
         platform: "bluesky" as const,
-        reactionType: n.reason as "like" | "repost" | "follow",
-        subjectId: n.reasonSubject ?? null,
+        reactionType: n.reason.replace("-via-repost", "") as "like" | "repost" | "follow",
+        subjectId,
         subjectExcerpt: subj?.text ?? null,
         subjectUrl: subj?.url ?? null,
+        viaRepost: n.reason.endsWith("-via-repost"),
         reactor: {
           handle: n.author.handle,
           did: n.author.did,

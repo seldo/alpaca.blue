@@ -48,9 +48,10 @@ function reactorLabel(group: ReactionGroup): string {
     who = names.join(" and ");
   }
 
+  const subject = group.viaRepost ? "your repost" : "your post";
   switch (group.reactionType) {
-    case "like":    return `${who} liked your post`;
-    case "repost":  return `${who} reposted your post`;
+    case "like":    return `${who} liked ${subject}`;
+    case "repost":  return `${who} reposted ${subject}`;
     case "follow":  return `${who} followed you`;
     case "quote":   return `${who} quoted your post`;
   }

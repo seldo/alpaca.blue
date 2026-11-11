@@ -17,6 +17,7 @@ export interface RawReaction {
   subjectId: string | null;      // URI/ID of the post that was liked/reposted; null for follows
   subjectExcerpt: string | null; // first ~80 chars of subject post text
   subjectUrl: string | null;
+  viaRepost?: boolean;           // reaction to the viewer's repost of subjectId, not their own post
   reactor: Reactor;
   reactedAt: string;             // ISO timestamp
 }
@@ -29,6 +30,7 @@ export interface ReactionGroup {
   subjectId: string | null;
   subjectExcerpt: string | null;
   subjectUrl: string | null;
+  viaRepost: boolean;
   reactors: Reactor[];
   latestAt: string;
   count: number;
@@ -40,11 +42,12 @@ export function groupReactions(rawReactions: RawReaction[]): ReactionGroup[] {
   const groups = new Map<string, ReactionGroup>();
 
   for (const r of rawReactions) {
-    // Follows are grouped together across platforms; everything else by (platform, type, subjectId)
+    // Follows are grouped together across platforms; everything else by
+    // (platform, type, subjectId), with reactions via the viewer's repost kept apart.
     const key =
       r.reactionType === "follow"
         ? "follow"
-        : `${r.platform}:${r.reactionType}:${r.subjectId}`;
+        : `${r.platform}:${r.reactionType}${r.viaRepost ? "-via-repost" : ""}:${r.subjectId}`;
 
     if (!groups.has(key)) {
       groups.set(key, {
@@ -55,6 +58,7 @@ export function groupReactions(rawReactions: RawReaction[]): ReactionGroup[] {
         subjectId: r.subjectId,
         subjectExcerpt: r.subjectExcerpt,
         subjectUrl: r.subjectUrl,
+        viaRepost: !!r.viaRepost,
         reactors: [],
         latestAt: r.reactedAt,
         count: 0,
