@@ -56,6 +56,7 @@ src/
       accounts/credentials/route.ts    # GET → hand the browser its Mastodon {instanceUrl, accessToken}
       accounts/disconnect/route.ts     # POST {platform} → disconnect mastodon / wipe all
       ai/describe-image/route.ts       # POST FormData{file} → Claude Haiku vision alt text
+      settings/route.ts                # GET / PATCH user preferences (users.repostFanout)
       bluesky/
         credentials/route.ts           # GET → brokered {did, pdsUrl, accessToken, dpopPrivateJwk} for direct PDS calls
         credentials/refresh/route.ts   # POST → server-side (locked) token refresh → fresh accessToken
@@ -89,6 +90,7 @@ src/
       realtime.ts                      #   Mastodon WSS user stream + Bluesky polling
       identities.ts                    #   Cached person/identity map; enrichAuthor/enrichReactor; fetchPostsForIdentity
       actions.ts + ClientActionsContext.ts  # like/repost (+ cross-platform fanout); context PostCard reads
+      settings.ts                      #   Cached /api/settings prefs (repostFanout gates repost fanout)
       useClientTimeline.ts / useClientFeed.ts  # Feed hooks: fetch → store → merge → "N new" pill
       types.ts                         #   ClientPost shape (PostCard-compatible)
     bluesky-server.ts                  # NodeOAuthClient (server), Redis state/session, getServerBlueskyAgent(), getBrokeredBlueskyCredentials()

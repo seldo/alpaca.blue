@@ -7,6 +7,7 @@ import { storeKey } from "./types";
 import { BlueskyClient } from "./bluesky";
 import { mastodonFavourite, mastodonReblog, mastodonPostStatus, type MastodonCredentials } from "./mastodon";
 import { patchPost } from "./store";
+import { getSettings } from "./settings";
 
 export interface Clients {
   bluesky: BlueskyClient | null;
@@ -52,10 +53,11 @@ export async function repostPost(
   }
 
   // Cross-platform fanout (best-effort — a failure here doesn't fail the primary
-  // repost). If the post natively exists on the other platform, repost that
-  // copy. Otherwise post its URL there as a cross-post — which gets reconciled
-  // back into a quote of the original on read (see mirrors.ts).
-  if (!undo) {
+  // repost), unless the user turned it off in settings. If the post natively
+  // exists on the other platform, repost that copy. Otherwise post its URL there
+  // as a cross-post — which gets reconciled back into a quote of the original on
+  // read (see mirrors.ts).
+  if (!undo && (await getSettings()).repostFanout) {
     const other = post.platform === "bluesky" ? "mastodon" : "bluesky";
     const mirror = post.alsoPostedOn?.find((p) => p.platform === other);
     try {

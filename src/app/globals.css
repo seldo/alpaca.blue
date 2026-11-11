@@ -2678,6 +2678,21 @@ a.post-timestamp:hover {
   display: none;
 }
 
+.settings-toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.settings-toggle input {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
 /* ── Profile page ─────────────────────────────────────── */
 
 .profile-header-container {

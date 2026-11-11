@@ -20,6 +20,8 @@ export const users = mysqlTable(
     blueskyHandle: varchar("bluesky_handle", { length: 255 }).notNull(),
     displayName: varchar("display_name", { length: 255 }),
     avatarUrl: text("avatar_url"),
+    // When true, reposting fans out to the post's copy (or a link) on the other network.
+    repostFanout: boolean("repost_fanout").default(true).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().onUpdateNow().notNull(),
   },

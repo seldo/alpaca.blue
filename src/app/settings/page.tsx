@@ -5,6 +5,7 @@ import { useRouter } from "next/navigation";
 import { AppLayout } from "@/components/AppHeader";
 import { MastodonConnect } from "@/components/MastodonConnect";
 import { ConnectedAccount } from "@/components/ConnectedAccount";
+import { getSettings, updateSettings } from "@/lib/client/settings";
 
 interface Account {
   id: number;
@@ -18,6 +19,8 @@ export default function SettingsPage() {
   const [accounts, setAccounts] = useState<Account[]>([]);
   const [loading, setLoading] = useState(true);
   const [disconnecting, setDisconnecting] = useState<string | null>(null);
+  const [repostFanout, setRepostFanout] = useState<boolean | null>(null);
+  const [savingSettings, setSavingSettings] = useState(false);
   const router = useRouter();
 
   const fetchAccounts = useCallback(async () => {
@@ -34,7 +37,22 @@ export default function SettingsPage() {
 
   useEffect(() => {
     fetchAccounts();
+    getSettings().then((s) => setRepostFanout(s.repostFanout));
   }, [fetchAccounts]);
+
+  async function handleRepostFanoutChange(value: boolean) {
+    const previous = repostFanout;
+    setRepostFanout(value);
+    setSavingSettings(true);
+    try {
+      await updateSettings({ repostFanout: value });
+    } catch (err) {
+      console.error("Settings save error:", err);
+      setRepostFanout(previous);
+    } finally {
+      setSavingSettings(false);
+    }
+  }
 
   async function handleDisconnectMastodon() {
     if (!confirm("Disconnect your Mastodon account? This will remove all Mastodon posts, follows, and identity matches. You can reconnect afterwards.")) return;
@@ -218,6 +236,22 @@ export default function SettingsPage() {
                 <MastodonConnect />
               </div>
             )}
+          </div>
+
+          <div className="settings-group">
+            <h3 className="settings-group-title">Reposts</h3>
+            <label className="settings-toggle">
+              <input
+                type="checkbox"
+                checked={repostFanout ?? true}
+                disabled={repostFanout === null || savingSettings}
+                onChange={(e) => handleRepostFanoutChange(e.target.checked)}
+              />
+              <span>Repost to both networks</span>
+            </label>
+            <p className="settings-account-note">
+              When on, reposting also reposts the post&apos;s copy on your other network, or shares a link to it there if it doesn&apos;t have one. When off, a repost only goes to the network the post came from.
+            </p>
           </div>
 
           <div className="settings-group">
