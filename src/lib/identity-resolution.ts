@@ -258,10 +258,16 @@ async function evaluateBatchWithLLM(
       "Content-Type": "application/json",
       "x-api-key": apiKey,
       "anthropic-version": "2023-06-01",
+      "anthropic-beta": "server-side-fallback-2026-07-01",
     },
     body: JSON.stringify({
-      model: "claude-sonnet-4-20250514",
-      max_tokens: 2048,
+      model: "claude-sonnet-5-5",
+      // Thinking is on by default on Sonnet 5.5; low effort keeps this batch
+      // classification fast and cheap. Room for thinking + the JSON array.
+      max_tokens: 16000,
+      output_config: { effort: "low" },
+      // On a safety-classifier refusal, re-run on a fallback model server-side.
+      fallbacks: "default",
       system: LLM_SYSTEM_PROMPT,
       messages: [{ role: "user", content: buildUserPrompt(candidates) }],
     }),
@@ -273,8 +279,15 @@ async function evaluateBatchWithLLM(
   }
 
   const data = await response.json();
-  const text =
-    data.content?.[0]?.text || "";
+  if (data.stop_reason === "refusal") {
+    console.error("LLM refused identity batch:", data.stop_details);
+    return [];
+  }
+  // Content may start with a thinking block; take the text block(s).
+  const text = (data.content ?? [])
+    .filter((b: { type: string }) => b.type === "text")
+    .map((b: { text: string }) => b.text)
+    .join("");
 
   // Extract JSON array from response (may be wrapped in markdown code fences)
   const jsonMatch = text.match(/\[[\s\S]*\]/);

@@ -34,8 +34,11 @@ export async function POST(request: NextRequest) {
       "anthropic-version": "2023-06-01",
     },
     body: JSON.stringify({
-      model: "claude-haiku-4-5-20251001",
+      model: "claude-haiku-5-5",
       max_tokens: 200,
+      // Haiku 5.5 thinks by default; alt text doesn't need it, and thinking
+      // would eat the small token budget.
+      thinking: { type: "disabled" },
       messages: [
         {
           role: "user",
@@ -64,6 +67,14 @@ export async function POST(request: NextRequest) {
   }
 
   const data = await response.json();
-  const description = (data.content?.[0]?.text || "").trim();
+  if (data.stop_reason === "refusal") {
+    console.error("[ai/describe-image] Claude refused:", data.stop_details);
+    return NextResponse.json({ error: "AI declined to describe this image" }, { status: 502 });
+  }
+  const description = (data.content ?? [])
+    .filter((b: { type: string }) => b.type === "text")
+    .map((b: { text: string }) => b.text)
+    .join("")
+    .trim();
   return NextResponse.json({ description });
 }
