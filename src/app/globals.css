@@ -37,6 +37,10 @@ html {
   /* Reserve scrollbar space so the centered flex layout doesn't shift
      when content grows past the viewport and a scrollbar appears. */
   scrollbar-gutter: stable;
+  /* We do our own pull-to-refresh. Without this, Chrome Android's native
+     pull-to-refresh (a full page reload) and iOS rubber-banding take over
+     whenever our gesture doesn't claim a touch, and fight it when it does. */
+  overscroll-behavior-y: none;
 }
 
 body {
@@ -981,17 +985,54 @@ body {
   color: var(--color-error);
 }
 
-/* Pull-to-refresh indicator */
-.pull-indicator {
+/* Pull-to-refresh: a bubble overlaid on the top of the feed. The wrapper is
+   zero-height so pulling/refreshing never shifts layout; PullToRefresh.tsx
+   positions the bubble via transform. */
+.ptr {
+  position: relative;
+  height: 0;
+  z-index: 50;
+}
+
+.ptr-bubble {
+  position: absolute;
+  top: 0;
+  left: 50%;
+  width: 40px;
+  height: 40px;
+  margin-left: -20px;
+  border-radius: 50%;
+  background: var(--color-bg);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.18);
   display: flex;
   align-items: center;
   justify-content: center;
-  overflow: hidden;
-  transition: height 0.1s ease;
+  opacity: 0;
+  transform: translate3d(0, -40px, 0);
+  pointer-events: none;
+  will-change: transform, opacity;
 }
 
-.pull-indicator .spinner {
-  transition: opacity 0.15s ease;
+.ptr-bubble.ptr-animating {
+  transition: transform 0.2s ease-out, opacity 0.2s ease-out;
+}
+
+.ptr-arc {
+  width: 20px;
+  height: 20px;
+  border: 2px solid var(--color-accent);
+  border-top-color: transparent;
+  border-radius: 50%;
+  opacity: 0.5;
+}
+
+.ptr-armed .ptr-arc,
+.ptr-refreshing .ptr-arc {
+  opacity: 1;
+}
+
+.ptr-refreshing .ptr-arc {
+  animation: spin 0.6s linear infinite;
 }
 
 /* Spinner */

@@ -10,7 +10,7 @@ import { useParams, useRouter } from "next/navigation";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
 import { Avatar } from "@/components/Avatar";
-import { usePullToRefresh } from "@/lib/usePullToRefresh";
+import { PullToRefresh } from "@/components/PullToRefresh";
 import { BlueskyClient } from "@/lib/client/bluesky";
 import {
   getMastodonCredentials,
@@ -88,7 +88,6 @@ export default function IdentityPage() {
   const [tab, setTab] = useState<Tab>("posts");
   const [posts, setPosts] = useState<ClientPost[]>([]);
   const [loading, setLoading] = useState(true);
-  const [fetching, setFetching] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
 
@@ -99,7 +98,14 @@ export default function IdentityPage() {
   const followUriRef = useRef<string | null>(null); // Bluesky follow record uri
   const accPosts = useRef<ClientPost[]>([]); // accumulated for current tab
   const cursor = useRef<string | null>(null);
-  const inFlight = useRef(false);
+  // The tab, mirrored for callbacks that must not change identity when it
+  // does (a `tab` dep on load used to re-run the whole page load on every tab
+  // switch, racing switchTab's own fetch).
+  const tabRef = useRef<Tab>("posts");
+  // Bumped on every reset; a fetch that finishes after a newer reset (quick
+  // tab switching, or a refresh mid-loadMore) drops its results.
+  const generation = useRef(0);
+  const inFlight = useRef<Promise<void> | null>(null);
 
   const ensureClients = useCallback(async () => {
     if (ready.current) return;
@@ -191,8 +197,14 @@ export default function IdentityPage() {
 
   // Fetches a page of the current tab and re-renders. reset clears accumulators.
   const fetchTabPage = useCallback(async (ident: Identity, t: Tab, reset: boolean) => {
-    if (reset) { accPosts.current = []; cursor.current = null; }
-    if (!reset && cursor.current === null) return; // exhausted
+    if (reset) {
+      generation.current++;
+      accPosts.current = [];
+      cursor.current = null;
+    } else if (cursor.current === null) {
+      return; // exhausted
+    }
+    const gen = generation.current;
 
     let page: { posts: ClientPost[]; cursor: string | null } = { posts: [], cursor: null };
     if (ident.platform === "bluesky" && bluesky.current) {
@@ -211,9 +223,11 @@ export default function IdentityPage() {
       });
     }
 
+    if (gen !== generation.current) return; // superseded
     cursor.current = page.cursor;
     accPosts.current.push(...applyTabFilter(page.posts, t));
     const map = await getIdentityMap();
+    if (gen !== generation.current) return;
     const all = [...accPosts.current];
     for (const p of all) enrichAuthor(p, map);
     all.sort((a, b) => b.postedAt.localeCompare(a.postedAt));
@@ -221,10 +235,7 @@ export default function IdentityPage() {
     setHasMore(page.cursor !== null);
   }, []);
 
-  const load = useCallback(async () => {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setFetching(true);
+  const doLoad = useCallback(async () => {
     try {
       await ensureClients();
       // identityId is either a numeric DB id (followed/matched identity) or a
@@ -243,20 +254,26 @@ export default function IdentityPage() {
       setIdentity(ident);
       identityRef.current = ident;
       if (!ident) return;
-      await Promise.all([profileLoad, fetchTabPage(ident, tab, true)]);
+      await Promise.all([profileLoad, fetchTabPage(ident, tabRef.current, true)]);
     } catch (err) {
       console.error("Failed to load identity:", err);
     } finally {
-      setFetching(false);
       setLoading(false);
-      inFlight.current = false;
     }
-  }, [identityId, ensureClients, loadProfile, resolveActor, fetchTabPage, tab]);
+  }, [identityId, ensureClients, loadProfile, resolveActor, fetchTabPage]);
+
+  // Single-flight: a call while a load is running joins it instead of
+  // resolving instantly, so pull-to-refresh keeps spinning until it lands.
+  const load = useCallback((): Promise<void> => {
+    inFlight.current ??= doLoad().finally(() => { inFlight.current = null; });
+    return inFlight.current;
+  }, [doLoad]);
 
   useEffect(() => { load(); }, [load]);
 
   async function switchTab(t: Tab) {
     if (t === tab || !identityRef.current) return;
+    tabRef.current = t;
     setTab(t);
     setPosts([]);
     await fetchTabPage(identityRef.current, t, true);
@@ -297,8 +314,6 @@ export default function IdentityPage() {
     }
   }
 
-  const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(load, fetching);
-
   const actions: ClientActions = {
     like: (post) => likePost(post, { bluesky: bluesky.current, mastodon: masto.current }),
     repost: (post) => repostPost(post, { bluesky: bluesky.current, mastodon: masto.current }),
@@ -306,6 +321,7 @@ export default function IdentityPage() {
 
   return (
     <AppLayout>
+      <PullToRefresh onRefresh={load} />
       <button className="back-btn" onClick={() => router.back()}>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M19 12H5" />
@@ -313,12 +329,6 @@ export default function IdentityPage() {
         </svg>
         Back
       </button>
-
-      {(pullDistance > 0 || pullRefreshing) && (
-        <div className="pull-indicator" style={{ height: pullRefreshing ? 48 : pullDistance * 0.5 }}>
-          <div className="spinner" style={{ opacity: pullRefreshing ? 1 : pullDistance > 0 ? 0.4 + 0.6 * (pullDistance / 72) : 0 }} />
-        </div>
-      )}
 
       {loading && <div className="spinner-container"><div className="spinner" /></div>}
 

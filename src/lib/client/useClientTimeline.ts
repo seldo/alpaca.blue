@@ -29,7 +29,7 @@ export function useClientTimeline() {
   const bluesky = useRef<BlueskyClient | null>(null);
   const postsRef = useRef<ClientPost[]>([]); // currently displayed (stale-closure-free)
   const pendingRef = useRef<ClientPost[] | null>(null); // merged but not yet shown
-  const inFlight = useRef(false);
+  const inFlight = useRef<Promise<void> | null>(null);
 
   // Reads everything local and produces the merged timeline view (replies
   // excluded, matching the server's queryTimeline; reposts kept).
@@ -65,18 +65,27 @@ export function useClientTimeline() {
   }, [present]);
 
   // Lazily resolve credentials + clients once, reused across the session.
-  const ensureClients = useCallback(async () => {
-    if (!ready) {
+  // Memoized on a ref (not the `ready` state) so this callback, and therefore
+  // `refresh`, keeps a stable identity. Depending on `ready` used to change
+  // `refresh` mid-load, which re-ran the mount effect and fetched twice.
+  const clientsPromise = useRef<Promise<void> | null>(null);
+  const ensureClients = useCallback(() => {
+    clientsPromise.current ??= (async () => {
       mastoCreds.current = await getMastodonCredentials();
       bluesky.current = await BlueskyClient.create();
       setReady(true);
-    }
-  }, [ready]);
+    })().catch((err) => {
+      clientsPromise.current = null; // let the next refresh retry
+      throw err;
+    });
+    return clientsPromise.current;
+  }, []);
 
   // Manual / initial refresh: fetch both platforms and present immediately.
-  const refresh = useCallback(async () => {
-    if (inFlight.current) return;
-    inFlight.current = true;
+  // A call while one is already running joins it (returns the same promise)
+  // instead of resolving instantly, so pull-to-refresh keeps its spinner up
+  // until the data actually lands.
+  const doRefresh = useCallback(async () => {
     setFetching(true);
     setError(null);
     try {
@@ -102,9 +111,13 @@ export function useClientTimeline() {
     } finally {
       setFetching(false);
       setLoading(false);
-      inFlight.current = false;
     }
   }, [ensureClients, mergedFromStore, present]);
+
+  const refresh = useCallback((): Promise<void> => {
+    inFlight.current ??= doRefresh().finally(() => { inFlight.current = null; });
+    return inFlight.current;
+  }, [doRefresh]);
 
   // Realtime ingest: store new posts, then stash behind the pill.
   const ingestMastodon = useCallback(async (statuses: MastodonStatus[]) => {

@@ -9,7 +9,7 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
-import { usePullToRefresh } from "@/lib/usePullToRefresh";
+import { PullToRefresh } from "@/components/PullToRefresh";
 import { BlueskyClient } from "@/lib/client/bluesky";
 import { getMastodonCredentials, fetchMastodonAuthorStatuses, type MastodonCredentials } from "@/lib/client/mastodon";
 import { getIdentityMap, enrichAuthor } from "@/lib/client/identities";
@@ -50,7 +50,7 @@ export default function ProfilePage() {
   const allPosts = useRef<ClientPost[]>([]);
   const bskyCursor = useRef<string | null | undefined>(undefined); // null = exhausted
   const mastoCursor = useRef<string | null | undefined>(undefined);
-  const inFlight = useRef(false);
+  const inFlight = useRef<Promise<void> | null>(null);
 
   const fetchAccounts = useCallback(async () => {
     try {
@@ -104,9 +104,7 @@ export default function ProfilePage() {
     );
   }, []);
 
-  const refreshPosts = useCallback(async () => {
-    if (inFlight.current) return;
-    inFlight.current = true;
+  const doRefreshPosts = useCallback(async () => {
     setFetching(true);
     try {
       if (!ready.current) {
@@ -121,9 +119,15 @@ export default function ProfilePage() {
     } finally {
       setFetching(false);
       setLoading(false);
-      inFlight.current = false;
     }
   }, [fetchPage, fetchAccounts]);
+
+  // Single-flight: a call while a load is running joins it instead of
+  // resolving instantly, so pull-to-refresh keeps spinning until it lands.
+  const refreshPosts = useCallback((): Promise<void> => {
+    inFlight.current ??= doRefreshPosts().finally(() => { inFlight.current = null; });
+    return inFlight.current;
+  }, [doRefreshPosts]);
 
   useEffect(() => {
     fetch("/api/auth/me").then((r) => (r.ok ? r.json() : null)).then(setUser).catch(() => {});
@@ -137,8 +141,6 @@ export default function ProfilePage() {
     window.addEventListener("posts:created", handler);
     return () => window.removeEventListener("posts:created", handler);
   }, [refreshPosts]);
-
-  const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refreshPosts, fetching);
 
   async function loadMore() {
     if (!hasMore || loadingMore) return;
@@ -157,6 +159,7 @@ export default function ProfilePage() {
 
   return (
     <AppLayout>
+      <PullToRefresh onRefresh={refreshPosts} />
       <button className="back-btn" onClick={() => router.back()}>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M19 12H5" />
@@ -165,11 +168,6 @@ export default function ProfilePage() {
         Back
       </button>
 
-      {(pullDistance > 0 || pullRefreshing) && (
-        <div className="pull-indicator" style={{ height: pullRefreshing ? 48 : pullDistance * 0.5 }}>
-          <div className="spinner" style={{ opacity: pullRefreshing ? 1 : pullDistance > 0 ? 0.4 + 0.6 * (pullDistance / 72) : 0 }} />
-        </div>
-      )}
       <ProfileHeader user={user} accounts={accounts} />
       {accounts.map((a) => a.bio ? (
         <ProfileBioBlock key={`${a.platform}-${a.handle}`} account={a} />

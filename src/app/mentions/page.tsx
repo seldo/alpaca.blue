@@ -6,7 +6,7 @@
 // browser, polled every 30s. No server fetch, no worker.
 
 import { useCallback, useEffect, useMemo } from "react";
-import { usePullToRefresh } from "@/lib/usePullToRefresh";
+import { PullToRefresh } from "@/components/PullToRefresh";
 import { useClientFeed, type FeedClients } from "@/lib/client/useClientFeed";
 import { fetchMastodonMentions, fetchMastodonReactions } from "@/lib/client/mastodon";
 import { getIdentityMap, enrichReactor } from "@/lib/client/identities";
@@ -65,8 +65,6 @@ export default function MentionsPage() {
     return arr.sort((a, b) => b.sortKey.localeCompare(a.sortKey));
   }, [posts, reactionGroups]);
 
-  const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(refresh, fetching);
-
   // Bottom-nav tap-on-active-tab reloads.
   useEffect(() => {
     function onRefresh() { refresh(); }
@@ -76,11 +74,7 @@ export default function MentionsPage() {
 
   return (
     <AppLayout>
-      {(pullDistance > 0 || pullRefreshing) && (
-        <div className="pull-indicator" style={{ height: pullRefreshing ? 48 : pullDistance * 0.5 }}>
-          <div className="spinner" style={{ opacity: pullRefreshing ? 1 : pullDistance > 0 ? 0.4 + 0.6 * (pullDistance / 72) : 0 }} />
-        </div>
-      )}
+      <PullToRefresh onRefresh={refresh} refreshing={fetching} />
 
       {newCount > 0 && (
         <div className="new-posts-pill-wrap">
@@ -88,10 +82,6 @@ export default function MentionsPage() {
             ↑ {newCount} new {newCount === 1 ? "mention" : "mentions"}
           </button>
         </div>
-      )}
-
-      {fetching && (
-        <p className="text-muted" style={{ textAlign: "center", padding: "4px 0", fontSize: "0.85em" }}>Fetching mentions...</p>
       )}
 
       {error && (

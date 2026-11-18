@@ -40,7 +40,7 @@ export function useClientFeed<E = undefined>(opts: {
   const masto = useRef<MastodonCredentials | null>(null);
   const postsRef = useRef<ClientPost[]>([]);
   const pendingRef = useRef<ClientPost[] | null>(null);
-  const inFlight = useRef(false);
+  const inFlight = useRef<{ promise: Promise<void>; stash: boolean } | null>(null);
 
   const mergedFromStore = useCallback(async () => {
     const [all, map] = await Promise.all([getRecent(300, null, feed), getIdentityMap()]);
@@ -68,16 +68,22 @@ export function useClientFeed<E = undefined>(opts: {
     }
   }, [present]);
 
-  const ensureClients = useCallback(async () => {
-    if (ready) return;
-    masto.current = await getMastodonCredentials();
-    bluesky.current = await BlueskyClient.create();
-    setReady(true);
-  }, [ready]);
+  // Memoized on a ref so `load` keeps a stable identity (depending on `ready`
+  // used to change `load` mid-fetch and re-run the mount effect → double load).
+  const clientsPromise = useRef<Promise<void> | null>(null);
+  const ensureClients = useCallback(() => {
+    clientsPromise.current ??= (async () => {
+      masto.current = await getMastodonCredentials();
+      bluesky.current = await BlueskyClient.create();
+      setReady(true);
+    })().catch((err) => {
+      clientsPromise.current = null;
+      throw err;
+    });
+    return clientsPromise.current;
+  }, []);
 
-  const load = useCallback(async (stashMode: boolean) => {
-    if (inFlight.current) return;
-    inFlight.current = true;
+  const run = useCallback(async (stashMode: boolean) => {
     if (!stashMode) setFetching(true);
     setError(null);
     try {
@@ -103,9 +109,25 @@ export function useClientFeed<E = undefined>(opts: {
     } finally {
       setFetching(false);
       setLoading(false);
-      inFlight.current = false;
     }
   }, [ensureClients, fetchPosts, fetchExtra, feed, mergedFromStore, present, stash]);
+
+  // Single-flight. A call while a load is running joins it rather than
+  // returning instantly, except that a foreground (present) load requested
+  // during a background (stash) poll waits for the poll and then runs, so a
+  // pull-to-refresh always ends with fresh posts on screen, not behind the pill.
+  const load = useCallback((stashMode: boolean): Promise<void> => {
+    const cur = inFlight.current;
+    if (cur) {
+      if (stashMode || !cur.stash) return cur.promise;
+      return cur.promise.then(() => load(false));
+    }
+    const promise = run(stashMode).finally(() => {
+      if (inFlight.current?.promise === promise) inFlight.current = null;
+    });
+    inFlight.current = { promise, stash: stashMode };
+    return promise;
+  }, [run]);
 
   const refresh = useCallback(() => load(false), [load]);
   const showNew = useCallback(() => {

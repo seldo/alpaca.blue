@@ -10,7 +10,7 @@ import { useParams, useRouter } from "next/navigation";
 import { PostCard } from "@/components/PostCard";
 import { AppLayout } from "@/components/AppHeader";
 import { Avatar } from "@/components/Avatar";
-import { usePullToRefresh } from "@/lib/usePullToRefresh";
+import { PullToRefresh } from "@/components/PullToRefresh";
 import { BlueskyClient } from "@/lib/client/bluesky";
 import { getMastodonCredentials, type MastodonCredentials } from "@/lib/client/mastodon";
 import { getIdentityMap, enrichAuthor, fetchPostsForIdentity } from "@/lib/client/identities";
@@ -39,13 +39,12 @@ export default function PersonPage() {
   const [identities, setIdentities] = useState<Identity[]>([]);
   const [posts, setPosts] = useState<ClientPost[]>([]);
   const [loading, setLoading] = useState(true);
-  const [fetching, setFetching] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [hasMore, setHasMore] = useState(false);
   const bluesky = useRef<BlueskyClient | null>(null);
   const masto = useRef<MastodonCredentials | null>(null);
   const ready = useRef(false);
-  const inFlight = useRef(false);
+  const inFlight = useRef<Promise<void> | null>(null);
   const identitiesRef = useRef<Identity[]>([]);
   const allPosts = useRef<ClientPost[]>([]); // accumulated across pages
   const cursors = useRef<Record<number, string | null>>({}); // identityId → next cursor (null = exhausted)
@@ -79,10 +78,7 @@ export default function PersonPage() {
     setHasMore(Object.values(cursors.current).some((c) => c !== null));
   }, []);
 
-  const load = useCallback(async () => {
-    if (inFlight.current) return;
-    inFlight.current = true;
-    setFetching(true);
+  const doLoad = useCallback(async () => {
     try {
       if (!ready.current) {
         masto.current = await getMastodonCredentials();
@@ -104,11 +100,16 @@ export default function PersonPage() {
     } catch (err) {
       console.error("Failed to load person:", err);
     } finally {
-      setFetching(false);
       setLoading(false);
-      inFlight.current = false;
     }
   }, [personId, fetchPage]);
+
+  // Single-flight: a call while a load is running joins it instead of
+  // resolving instantly, so pull-to-refresh keeps spinning until it lands.
+  const load = useCallback((): Promise<void> => {
+    inFlight.current ??= doLoad().finally(() => { inFlight.current = null; });
+    return inFlight.current;
+  }, [doLoad]);
 
   const loadMore = useCallback(async () => {
     if (loadingMore || !hasMore) return;
@@ -122,8 +123,6 @@ export default function PersonPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  const { pullDistance, refreshing: pullRefreshing } = usePullToRefresh(load, fetching);
-
   const actions: ClientActions = {
     like: (post) => likePost(post, { bluesky: bluesky.current, mastodon: masto.current }),
     repost: (post) => repostPost(post, { bluesky: bluesky.current, mastodon: masto.current }),
@@ -131,6 +130,7 @@ export default function PersonPage() {
 
   return (
     <AppLayout>
+      <PullToRefresh onRefresh={load} />
       <button className="back-btn" onClick={() => router.back()}>
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
           <path d="M19 12H5" />
@@ -138,12 +138,6 @@ export default function PersonPage() {
         </svg>
         Back
       </button>
-
-      {(pullDistance > 0 || pullRefreshing) && (
-        <div className="pull-indicator" style={{ height: pullRefreshing ? 48 : pullDistance * 0.5 }}>
-          <div className="spinner" style={{ opacity: pullRefreshing ? 1 : pullDistance > 0 ? 0.4 + 0.6 * (pullDistance / 72) : 0 }} />
-        </div>
-      )}
 
       {loading && <div className="spinner-container"><div className="spinner" /></div>}
 
