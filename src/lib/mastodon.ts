@@ -1,6 +1,7 @@
 import { db } from "@/db";
 import { connectedAccounts, platformIdentities } from "@/db/schema";
 import { eq, and, sql } from "drizzle-orm";
+import { checkUrl, safeRequest } from "./safe-fetch";
 
 interface MastodonApp {
   client_id: string;
@@ -17,6 +18,41 @@ interface MastodonAccount {
   url: string;
 }
 
+// write:follows is needed for follow/unfollow from the identity page. Tokens
+// granted before it was added don't have it; those users must reconnect.
+const SCOPES = "read write:favourites write:statuses write:media write:follows";
+
+// Validates a user-supplied Mastodon instance URL: https, public address,
+// default port (see safe-fetch). Returns the normalized origin. Throws an
+// Error with a user-facing message otherwise.
+export function checkInstanceUrl(instanceUrl: string): string {
+  let u: URL;
+  try {
+    u = checkUrl(instanceUrl);
+  } catch {
+    throw new Error("That doesn't look like a public Mastodon server address.");
+  }
+  if (u.protocol !== "https:") throw new Error("Mastodon servers must use https.");
+  return u.origin;
+}
+
+// Every server-side request to a user's Mastodon instance goes through here:
+// the SSRF guards in safe-fetch, plus a same-origin check so a URL the
+// instance hands back (e.g. a Link: rel="next" page) can't send the bearer
+// token to some other host.
+export async function instanceRequest(
+  instanceUrl: string,
+  pathOrUrl: string,
+  init: { method?: string; headers?: Record<string, string>; body?: string } = {},
+): Promise<Response> {
+  const origin = new URL(instanceUrl).origin;
+  const target = new URL(pathOrUrl, origin);
+  if (target.origin !== origin) {
+    throw new Error(`Refusing request outside ${origin}: ${target.origin}`);
+  }
+  return safeRequest(target.href, init);
+}
+
 function getRedirectUri(appOrigin: string) {
   return `${appOrigin}/api/auth/mastodon/callback`;
 }
@@ -26,14 +62,13 @@ export async function registerMastodonApp(
   instanceUrl: string,
   appOrigin: string
 ): Promise<MastodonApp> {
-  const url = `${instanceUrl}/api/v1/apps`;
-  const response = await fetch(url, {
+  const response = await instanceRequest(instanceUrl, "/api/v1/apps", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       client_name: "alpaca.blue",
       redirect_uris: getRedirectUri(appOrigin),
-      scopes: "read write:favourites write:statuses write:media",
+      scopes: SCOPES,
       website: "https://alpaca.blue",
     }),
   });
@@ -55,7 +90,7 @@ export function getMastodonAuthUrl(
     client_id: clientId,
     redirect_uri: getRedirectUri(appOrigin),
     response_type: "code",
-    scope: "read write:favourites write:statuses write:media",
+    scope: SCOPES,
   });
 
   return `${instanceUrl}/oauth/authorize?${params.toString()}`;
@@ -69,7 +104,7 @@ export async function exchangeMastodonToken(
   code: string,
   appOrigin: string
 ): Promise<string> {
-  const response = await fetch(`${instanceUrl}/oauth/token`, {
+  const response = await instanceRequest(instanceUrl, "/oauth/token", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -78,7 +113,7 @@ export async function exchangeMastodonToken(
       redirect_uri: getRedirectUri(appOrigin),
       grant_type: "authorization_code",
       code,
-      scope: "read write:favourites write:statuses write:media",
+      scope: SCOPES,
     }),
   });
 
@@ -96,12 +131,9 @@ export async function saveMastodonAccount(
   accessToken: string,
   userId: number
 ) {
-  const response = await fetch(
-    `${instanceUrl}/api/v1/accounts/verify_credentials`,
-    {
-      headers: { Authorization: `Bearer ${accessToken}` },
-    }
-  );
+  const response = await instanceRequest(instanceUrl, "/api/v1/accounts/verify_credentials", {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
 
   if (!response.ok) {
     throw new Error("Failed to verify Mastodon credentials");
@@ -121,8 +153,13 @@ export async function saveMastodonAccount(
       accessToken,
     })
     .onDuplicateKeyUpdate({
+      // Handle and instance too: connecting a different account (or a new
+      // instance) over an existing row must not pair the new token with the
+      // old instance URL.
       set: {
+        handle: fullHandle,
         did: account.id,
+        instanceUrl,
         accessToken,
         updatedAt: new Date(),
       },
@@ -137,7 +174,9 @@ async function fetchFollowsPage(
   accessToken: string,
   url: string
 ): Promise<{ accounts: MastodonAccount[]; nextUrl: string | null }> {
-  const response = await fetch(url, {
+  // `url` after the first page comes from the instance's Link header;
+  // instanceRequest keeps it on the instance's own origin.
+  const response = await instanceRequest(instanceUrl, url, {
     headers: { Authorization: `Bearer ${accessToken}` },
   });
 

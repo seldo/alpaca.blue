@@ -17,6 +17,8 @@ import { mergeTimeline } from "@/lib/client/dedup";
 import { likePost, repostPost } from "@/lib/client/actions";
 import { ClientActionsContext, type ClientActions } from "@/lib/client/ClientActionsContext";
 import type { ClientPost } from "@/lib/client/types";
+import { SafeHtml } from "@/components/SafeHtml";
+import { byFeedTimeDesc } from "@/lib/client/types";
 
 interface UserInfo {
   blueskyHandle: string;
@@ -96,7 +98,7 @@ export default function ProfilePage() {
     const map = await getIdentityMap();
     const all = [...allPosts.current];
     for (const p of all) enrichAuthor(p, map);
-    all.sort((a, b) => b.postedAt.localeCompare(a.postedAt));
+    all.sort(byFeedTimeDesc);
     setPosts(mergeTimeline(all));
     setHasMore(
       (!!bluesky.current && bskyCursor.current !== null) ||
@@ -255,9 +257,9 @@ function ProfileBioBlock({ account }: { account: Account }) {
         <span className="profile-bio-handle">{account.handle}</span>
       </div>
       {account.platform === "mastodon" ? (
-        <div
+        <SafeHtml
           className="profile-bio-content"
-          dangerouslySetInnerHTML={{ __html: account.bio }}
+          html={account.bio}
         />
       ) : (
         <p className="profile-bio-content profile-bio-content-text">{account.bio}</p>

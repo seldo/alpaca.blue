@@ -9,6 +9,7 @@ import { mergeTimeline } from "./dedup";
 import { likePost, repostPost } from "./actions";
 import { getIdentityMap, enrichAuthor } from "./identities";
 import type { ClientActions } from "./ClientActionsContext";
+import { feedTime } from "./types";
 
 export interface FeedClients {
   bluesky: BlueskyClient | null;
@@ -58,9 +59,9 @@ export function useClientFeed<E = undefined>(opts: {
   const stash = useCallback((merged: ClientPost[]) => {
     if (postsRef.current.length === 0) return present(merged);
     const shown = new Set(postsRef.current.map((p) => `${p.platform}:${p.platformPostId}`));
-    const top = postsRef.current[0]?.postedAt;
+    const top = postsRef.current[0] ? feedTime(postsRef.current[0]) : undefined;
     const fresh = merged.filter(
-      (p) => !shown.has(`${p.platform}:${p.platformPostId}`) && (!top || p.postedAt > top),
+      (p) => !shown.has(`${p.platform}:${p.platformPostId}`) && (!top || feedTime(p) > top),
     );
     if (fresh.length > 0) {
       pendingRef.current = merged;

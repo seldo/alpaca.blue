@@ -31,6 +31,12 @@ export interface LinkCard {
   thumb?: string;
 }
 
+export interface Reposter {
+  handle: string;
+  displayName: string | null;
+  platform: string;
+}
+
 export interface CrossPost {
   platform: string;
   postUrl: string | null;
@@ -54,9 +60,17 @@ export interface ClientPost {
   contentHtml: string | null;
   media: MediaItem[] | null;
   replyToId: string | null;
+  // Mastodon only: "public" | "unlisted" | "private" (followers only) |
+  // "direct" (private mention). Replies must not be less private than this.
+  visibility?: string | null;
   threadRootId: string | null;
   threadRootCid: string | null;
   repostOfId: string | null;
+  // Set when this feed entry is someone's repost of the post: who reposted it
+  // and when. Feeds sort by repostedAt (see feedTime) so a repost of an old
+  // post shows up where the repost happened, not days down the timeline.
+  repostedBy?: Reposter | null;
+  repostedAt?: string | null;
   quotedPost: QuotedPost | null;
   linkCard: LinkCard | null;
   likeCount: number | null;
@@ -88,4 +102,14 @@ export interface ClientPost {
 
 export function storeKey(platform: string, platformPostId: string): string {
   return `${platform}:${platformPostId}`;
+}
+
+// Where a post sits in a feed: the repost time for a repost, else post time.
+export function feedTime(p: Pick<ClientPost, "postedAt" | "repostedAt">): string {
+  return p.repostedAt || p.postedAt;
+}
+
+// Newest-first comparator by feed position.
+export function byFeedTimeDesc(a: ClientPost, b: ClientPost): number {
+  return feedTime(b).localeCompare(feedTime(a));
 }

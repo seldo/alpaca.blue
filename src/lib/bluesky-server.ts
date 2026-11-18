@@ -193,12 +193,18 @@ async function readRawSession(did: string): Promise<NodeSavedSession | undefined
 }
 
 // Returns the material the browser needs to call the PDS directly. Pass
-// `refresh: true` to force a token refresh (used by the refresh endpoint when
-// the browser hits a 401); otherwise restore() refreshes only if the token is
-// (about to be) expired.
+// `refresh: true` when the browser hit a 401 (the refresh endpoint); otherwise
+// restore() refreshes only if the token is (about to be) expired.
+//
+// With `staleToken` (the access token that just failed), a refresh only
+// happens if that token is still the stored one. If something else already
+// rotated it (another tab, another request, a server-side agent), the current
+// token is returned as-is. Without this, every 401 forced a fresh rotation,
+// and parallel 401s would rotate the token repeatedly, each invalidating the
+// token the previous refresh had just handed out.
 export async function getBrokeredBlueskyCredentials(
   userId: number,
-  opts: { refresh?: boolean } = {},
+  opts: { refresh?: boolean; staleToken?: string } = {},
 ): Promise<BrokeredBlueskyCredentials | null> {
   const [user] = await db
     .select({ blueskyDid: users.blueskyDid })
@@ -212,7 +218,22 @@ export async function getBrokeredBlueskyCredentials(
     const client = await getNodeOAuthClient();
     // restore persists any refreshed tokenSet back to the Redis session store,
     // so we read the (possibly updated) raw session immediately afterwards.
-    await client.restore(did, opts.refresh ? true : "auto");
+    if (opts.refresh) {
+      // The check-then-refresh runs under a per-user lock so two concurrent
+      // refresh requests for the same stale token rotate it only once; the
+      // second sees the new token and skips. (The OAuth client takes its own,
+      // differently named lock inside restore().)
+      await requestRedisLock(`broker-refresh:${did}`, async () => {
+        if (opts.staleToken) {
+          const current = await readRawSession(did);
+          const stored = current?.tokenSet?.access_token;
+          if (stored && stored !== opts.staleToken) return; // already rotated
+        }
+        await client.restore(did, true);
+      });
+    } else {
+      await client.restore(did, "auto");
+    }
   } catch (err) {
     console.error("[bluesky-server] broker restore failed for user", userId, err);
     return null;

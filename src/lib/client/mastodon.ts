@@ -4,7 +4,7 @@
 
 import type { ClientPost } from "./types";
 import type { RawReaction } from "@/lib/reactions";
-import { mapMastodonStatus, stripHtmlTags, type MastodonStatus } from "./transform";
+import { mapMastodonStatus, stripHtmlTags, type MastodonStatus, type MastodonVisibility } from "./transform";
 import { attachDedupeHashes } from "./dedup";
 
 export interface MastodonCredentials {
@@ -265,6 +265,10 @@ export async function mastodonFollow(
     method: "POST",
     headers: { Authorization: `Bearer ${creds.accessToken}` },
   });
+  if (res.status === 403) {
+    // Tokens issued before write:follows was requested can't follow.
+    throw new Error("To follow and unfollow on Mastodon, reconnect your Mastodon account in Settings.");
+  }
   if (!res.ok) throw new Error(`Mastodon ${path} failed: ${res.status}`);
 }
 
@@ -355,7 +359,7 @@ export async function mastodonUploadMedia(
 
 export async function mastodonPostStatus(
   creds: MastodonCredentials,
-  opts: { status: string; inReplyToId?: string; mediaIds?: string[] },
+  opts: { status: string; inReplyToId?: string; mediaIds?: string[]; visibility?: MastodonVisibility },
 ): Promise<{ id: string; url: string }> {
   const res = await fetch(`${creds.instanceUrl}/api/v1/statuses`, {
     method: "POST",
@@ -364,6 +368,7 @@ export async function mastodonPostStatus(
       status: opts.status,
       ...(opts.mediaIds && opts.mediaIds.length > 0 ? { media_ids: opts.mediaIds } : {}),
       ...(opts.inReplyToId ? { in_reply_to_id: opts.inReplyToId } : {}),
+      ...(opts.visibility ? { visibility: opts.visibility } : {}),
     }),
   });
   if (!res.ok) throw new Error(`Mastodon post failed: ${res.status}`);
@@ -371,32 +376,84 @@ export async function mastodonPostStatus(
   return { id: s.id, url: s.url };
 }
 
-// Mastodon convention: replies must @-prefix the parent author or they aren't
-// threaded/notified. Returns the prefix mention, or null when not needed
-// (replying to self, or the author is already mentioned at the start). Ported
-// from the /api/posts/create server helper.
-export async function mastodonReplyPrefix(
+const VISIBILITY_RANK: Record<MastodonVisibility, number> = {
+  public: 0,
+  unlisted: 1,
+  private: 2,
+  direct: 3,
+};
+
+function isVisibility(v: unknown): v is MastodonVisibility {
+  return typeof v === "string" && v in VISIBILITY_RANK;
+}
+
+// The more private of two visibilities (Mastodon's own rule for replies: a
+// reply defaults to the parent's visibility when that's more restrictive than
+// the user's default).
+export function morePrivate(
+  a: MastodonVisibility | null | undefined,
+  b: MastodonVisibility | null | undefined,
+): MastodonVisibility | null {
+  if (!a) return b ?? null;
+  if (!b) return a;
+  return VISIBILITY_RANK[a] >= VISIBILITY_RANK[b] ? a : b;
+}
+
+export function isRestrictedVisibility(v: string | null | undefined): boolean {
+  return v === "private" || v === "direct";
+}
+
+// The account's default post visibility (Settings → Posting defaults).
+async function fetchDefaultVisibility(creds: MastodonCredentials): Promise<MastodonVisibility | null> {
+  try {
+    const res = await fetch(`${creds.instanceUrl}/api/v1/accounts/verify_credentials`, {
+      headers: { Authorization: `Bearer ${creds.accessToken}` },
+    });
+    if (!res.ok) return null;
+    const v = (await res.json())?.source?.privacy;
+    return isVisibility(v) ? v : null;
+  } catch {
+    return null;
+  }
+}
+
+// Everything a Mastodon reply needs from its parent:
+//  • prefix: the @-mention Mastodon convention requires (or the reply isn't
+//    threaded/notified); null when replying to self or already mentioned.
+//  • visibility: the more private of the parent's visibility and the user's
+//    default, so a reply to a followers-only post or a private mention is
+//    never posted publicly. `knownVisibility` (from the post we rendered) is
+//    the fallback if the parent can't be fetched.
+export async function mastodonReplyContext(
   creds: MastodonCredentials,
   inReplyToId: string,
   content: string,
-): Promise<string | null> {
+  knownVisibility?: string | null,
+): Promise<{ prefix: string | null; visibility: MastodonVisibility | null }> {
+  const fallbackVisibility = isVisibility(knownVisibility) ? knownVisibility : null;
+  const defaultVisibility = await fetchDefaultVisibility(creds);
   try {
     const res = await fetch(`${creds.instanceUrl}/api/v1/statuses/${inReplyToId}`, {
       headers: { Authorization: `Bearer ${creds.accessToken}` },
     });
-    if (!res.ok) return null;
-    const status = (await res.json()) as { account?: { acct?: string } };
+    if (!res.ok) {
+      return { prefix: null, visibility: morePrivate(fallbackVisibility, defaultVisibility) };
+    }
+    const status = (await res.json()) as { account?: { acct?: string }; visibility?: unknown };
+    const parentVisibility = isVisibility(status.visibility) ? status.visibility : fallbackVisibility;
+    const visibility = morePrivate(parentVisibility, defaultVisibility);
+
     const acct = status.account?.acct;
-    if (!acct) return null;
+    if (!acct) return { prefix: null, visibility };
     const ownInstance = new URL(creds.instanceUrl).hostname;
     const fullAcct = acct.includes("@") ? acct : `${acct}@${ownInstance}`;
     const ownNormalized = creds.handle.replace(/^@/, "");
-    if (fullAcct.toLowerCase() === ownNormalized.toLowerCase()) return null;
+    if (fullAcct.toLowerCase() === ownNormalized.toLowerCase()) return { prefix: null, visibility };
     const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    if (new RegExp(`^@${escapeRegex(acct)}\\b`, "i").test(content.trim())) return null;
-    return `@${acct}`;
+    if (new RegExp(`^@${escapeRegex(acct)}\\b`, "i").test(content.trim())) return { prefix: null, visibility };
+    return { prefix: `@${acct}`, visibility };
   } catch (err) {
-    console.error("[mastodonReplyPrefix] lookup failed:", err);
-    return null;
+    console.error("[mastodonReplyContext] lookup failed:", err);
+    return { prefix: null, visibility: morePrivate(fallbackVisibility, defaultVisibility) };
   }
 }

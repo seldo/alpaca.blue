@@ -18,6 +18,8 @@ import { mergeTimeline } from "@/lib/client/dedup";
 import { likePost, repostPost } from "@/lib/client/actions";
 import { ClientActionsContext, type ClientActions } from "@/lib/client/ClientActionsContext";
 import type { ClientPost } from "@/lib/client/types";
+import { SafeHtml } from "@/components/SafeHtml";
+import { byFeedTimeDesc } from "@/lib/client/types";
 
 interface Identity {
   id: number;
@@ -73,7 +75,7 @@ export default function PersonPage() {
     const map = await getIdentityMap();
     const all = [...allPosts.current];
     for (const p of all) enrichAuthor(p, map);
-    all.sort((a, b) => b.postedAt.localeCompare(a.postedAt));
+    all.sort(byFeedTimeDesc);
     setPosts(mergeTimeline(all));
     setHasMore(Object.values(cursors.current).some((c) => c !== null));
   }, []);
@@ -165,7 +167,7 @@ export default function PersonPage() {
                     </div>
                     {i.bio && (
                       i.platform === "mastodon" ? (
-                        <div className="person-identity-bio" dangerouslySetInnerHTML={{ __html: i.bio }} />
+                        <SafeHtml className="person-identity-bio" html={i.bio} />
                       ) : (
                         <p className="person-identity-bio person-identity-bio-text">{i.bio}</p>
                       )

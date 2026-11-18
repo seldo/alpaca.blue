@@ -57,10 +57,17 @@ export async function POST(request: Request) {
       personId = result.insertId;
     }
 
+    // Only the identities verified above as this user's. The raw request ids
+    // must not reach the UPDATE, or any id could be re-pointed at our person.
     await db
       .update(platformIdentities)
       .set({ personId })
-      .where(inArray(platformIdentities.id, identityIds));
+      .where(
+        and(
+          inArray(platformIdentities.id, identities.map((i) => i.id)),
+          eq(platformIdentities.userId, userId)
+        )
+      );
 
     return NextResponse.json({ personId });
   } catch (err) {

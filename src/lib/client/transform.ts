@@ -7,6 +7,8 @@ import type { ClientPost, MediaItem, QuotedPost } from "./types";
 
 // ── Mastodon API shapes (subset we consume) ────────────────
 
+export type MastodonVisibility = "public" | "unlisted" | "private" | "direct";
+
 export interface MastodonStatus {
   id: string;
   url: string;
@@ -18,6 +20,7 @@ export interface MastodonStatus {
   favourited?: boolean;
   reblogged?: boolean;
   in_reply_to_id: string | null;
+  visibility?: MastodonVisibility;
   reblog: MastodonStatus | null;
   quote?: {
     state: "accepted" | "pending" | "rejected" | "revoked" | "deleted" | "unauthorized";
@@ -115,9 +118,18 @@ export function mapMastodonStatus(
     contentHtml: actual.content,
     media: media.length > 0 ? media : null,
     replyToId: actual.in_reply_to_id || null,
+    visibility: actual.visibility ?? null,
     threadRootId: null,
     threadRootCid: null,
     repostOfId: status.reblog ? status.id : null,
+    repostedBy: status.reblog
+      ? {
+          handle: handleOf(status.account.acct, instanceHost),
+          displayName: status.account.display_name || null,
+          platform: "mastodon",
+        }
+      : null,
+    repostedAt: status.reblog ? new Date(status.created_at).toISOString() : null,
     quotedPost: extractMastodonQuote(actual, instanceHost) || null,
     linkCard: null,
     likeCount: actual.favourites_count || 0,

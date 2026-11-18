@@ -6,6 +6,7 @@ import { AppLayout } from "@/components/AppHeader";
 import { MastodonConnect } from "@/components/MastodonConnect";
 import { ConnectedAccount } from "@/components/ConnectedAccount";
 import { getSettings, updateSettings } from "@/lib/client/settings";
+import { clearLocalData } from "@/lib/client/local-data";
 
 interface Account {
   id: number;
@@ -65,10 +66,9 @@ export default function SettingsPage() {
       });
       if (res.ok) {
         setAccounts((prev) => prev.filter((a) => a.platform !== "mastodon"));
-        sessionStorage.removeItem("timeline_cache");
-        sessionStorage.removeItem("timeline_scroll");
-        sessionStorage.removeItem("mentions_cache");
-        sessionStorage.removeItem("mentions_scroll");
+        // Drop cached posts (including the now-disconnected Mastodon ones)
+        // and the cached Mastodon credentials.
+        await clearLocalData();
       }
     } catch (err) {
       console.error("Disconnect error:", err);
@@ -78,8 +78,8 @@ export default function SettingsPage() {
   }
 
   async function handleLogout() {
+    await clearLocalData();
     await fetch("/api/auth/logout", { method: "POST" });
-    sessionStorage.clear();
     router.push("/login");
   }
 
@@ -94,7 +94,7 @@ export default function SettingsPage() {
         body: JSON.stringify({ platform: "all" }),
       });
       if (res.ok) {
-        sessionStorage.clear();
+        await clearLocalData();
         router.push("/timeline");
       }
     } catch (err) {

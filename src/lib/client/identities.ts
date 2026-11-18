@@ -117,3 +117,8 @@ export async function fetchPostsForIdentity(
   }
   return { posts: [], cursor: null };
 }
+
+// Drops the cached map (logout / account change).
+export function resetIdentityMap(): void {
+  mapPromise = null;
+}

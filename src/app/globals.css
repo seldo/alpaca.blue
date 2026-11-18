@@ -1525,6 +1525,39 @@ a.post-timestamp:hover {
   margin-bottom: 6px;
 }
 
+/* "X reposted" line above a reposted post */
+.post-reposted-by {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8125rem;
+  color: var(--color-text-muted);
+  margin-bottom: 6px;
+}
+
+.post-reposted-by-link {
+  color: inherit;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.post-reposted-by-link:hover {
+  text-decoration: underline;
+}
+
+/* Mastodon followers-only / private-mention marker next to the handle */
+.post-visibility-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 4px;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: nowrap;
+}
+
 .post-reply-to-link {
   color: var(--color-brand);
   text-decoration: none;
@@ -2474,6 +2507,17 @@ a.post-timestamp:hover {
   color: var(--color-success);
   font-size: 0.9rem;
   padding: 8px 0;
+}
+
+.create-post-success.create-post-partial {
+  color: var(--color-error);
+}
+
+/* Shown in compose when replying to a followers-only post / private mention */
+.create-post-private-note {
+  margin: -4px 0 10px;
+  font-size: 0.8rem;
+  color: var(--color-text-muted);
 }
 
 .create-post-success-close {

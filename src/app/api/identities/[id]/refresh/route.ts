@@ -4,6 +4,7 @@ import { db } from "@/db";
 import { connectedAccounts, platformIdentities } from "@/db/schema";
 import { requireSession, unauthorizedResponse } from "@/lib/session";
 import { getServerBlueskyAgent } from "@/lib/bluesky-server";
+import { instanceRequest } from "@/lib/mastodon";
 
 // Re-fetch an identity's profile from its platform and update the cached
 // avatarUrl/displayName. Triggered client-side when an avatar 404s, so a
@@ -52,8 +53,9 @@ export async function POST(
         .limit(1);
       if (account?.accessToken && account.instanceUrl) {
         const acct = identity.handle.replace(/^@/, "");
-        const r = await fetch(
-          `${account.instanceUrl}/api/v1/accounts/lookup?acct=${encodeURIComponent(acct)}`,
+        const r = await instanceRequest(
+          account.instanceUrl,
+          `/api/v1/accounts/lookup?acct=${encodeURIComponent(acct)}`,
           { headers: { Authorization: `Bearer ${account.accessToken}` } },
         );
         if (r.ok) {

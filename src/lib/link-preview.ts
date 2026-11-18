@@ -1,3 +1,5 @@
+import { safeFetch } from "./safe-fetch";
+
 interface OgMetadata {
   title: string;
   description: string;
@@ -45,38 +47,20 @@ function matchTitle(html: string): string | null {
 
 async function fetchOgMetadata(url: string): Promise<OgMetadata | null> {
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    const res = await fetch(url, {
-      signal: controller.signal,
+    // Read at most ~256KB, stopping at </head> — OG tags live in <head>.
+    const res = await safeFetch(url, {
       headers: { "User-Agent": USER_AGENT, Accept: "text/html,application/xhtml+xml" },
-      redirect: "follow",
+      timeoutMs: FETCH_TIMEOUT_MS,
+      maxBytes: 256 * 1024,
+      stopAt: "</head>",
     });
-    clearTimeout(timeout);
-    if (!res.ok) return null;
+    if (!res || res.status < 200 || res.status >= 300) return null;
 
     const contentType = res.headers.get("content-type") || "";
     if (!contentType.includes("html")) return null;
 
-    // Read at most ~256KB — OG tags live in <head>
-    const reader = res.body?.getReader();
-    if (!reader) return null;
-    const chunks: Uint8Array[] = [];
-    let total = 0;
-    const MAX = 256 * 1024;
-    while (total < MAX) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      chunks.push(value);
-      total += value.length;
-      // Stop once we've passed </head>
-      const str = new TextDecoder("utf-8", { fatal: false }).decode(value);
-      if (str.toLowerCase().includes("</head>")) break;
-    }
-    reader.cancel().catch(() => {});
-    const html = new TextDecoder("utf-8", { fatal: false }).decode(
-      Buffer.concat(chunks.map((c) => Buffer.from(c)))
-    );
+    const html = new TextDecoder("utf-8", { fatal: false }).decode(res.body);
+    const finalUrl = res.url;
 
     const title =
       matchMeta(html, "og:title") ||
@@ -91,9 +75,9 @@ async function fetchOgMetadata(url: string): Promise<OgMetadata | null> {
       "";
 
     const rawImage = matchMeta(html, "og:image") || matchMeta(html, "twitter:image");
-    const image = rawImage ? new URL(rawImage, res.url).href : undefined;
+    const image = rawImage ? new URL(rawImage, finalUrl).href : undefined;
 
-    return { title, description, image, finalUrl: res.url };
+    return { title, description, image, finalUrl };
   } catch {
     return null;
   }
@@ -113,17 +97,15 @@ async function fetchThumbBytes(
   imageUrl: string,
 ): Promise<{ base64: string; mimeType: string } | undefined> {
   try {
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-    const res = await fetch(imageUrl, {
-      signal: controller.signal,
+    const res = await safeFetch(imageUrl, {
       headers: { "User-Agent": USER_AGENT },
-      redirect: "follow",
+      timeoutMs: FETCH_TIMEOUT_MS,
+      maxBytes: MAX_THUMB_BYTES,
+      rejectOversize: true, // a truncated image is useless
     });
-    clearTimeout(timeout);
-    if (!res.ok) return undefined;
-    const buf = Buffer.from(await res.arrayBuffer());
-    if (buf.length === 0 || buf.length > MAX_THUMB_BYTES) return undefined;
+    if (!res || res.status < 200 || res.status >= 300) return undefined;
+    const buf = res.body;
+    if (buf.length === 0) return undefined;
     const mimeType = (res.headers.get("content-type") || "image/jpeg").split(";")[0].trim();
     if (!mimeType.startsWith("image/")) return undefined;
     return { base64: buf.toString("base64"), mimeType };

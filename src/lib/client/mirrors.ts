@@ -95,3 +95,7 @@ export async function resolveMirrorQuote(post: ClientPost): Promise<QuotedPost |
   cache.set(m.url, quote);
   return quote;
 }
+
+export function resetMirrorCache(): void {
+  cache.clear();
+}

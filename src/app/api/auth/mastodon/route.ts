@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { registerMastodonApp, getMastodonAuthUrl } from "@/lib/mastodon";
+import { registerMastodonApp, getMastodonAuthUrl, checkInstanceUrl } from "@/lib/mastodon";
 import { cookies } from "next/headers";
 import { requireSession, unauthorizedResponse } from "@/lib/session";
 
@@ -35,6 +35,17 @@ export async function POST(request: NextRequest) {
     }
     // Remove trailing slash
     normalizedUrl = normalizedUrl.replace(/\/+$/, "");
+
+    // The server is about to POST to this address, so it must be a public
+    // https host (no internal addresses, other ports, or paths).
+    try {
+      normalizedUrl = checkInstanceUrl(normalizedUrl);
+    } catch (err) {
+      return NextResponse.json(
+        { error: err instanceof Error ? err.message : "Invalid Mastodon server" },
+        { status: 400 }
+      );
+    }
 
     const appOrigin = getAppOrigin(request);
     const app = await registerMastodonApp(normalizedUrl, appOrigin);

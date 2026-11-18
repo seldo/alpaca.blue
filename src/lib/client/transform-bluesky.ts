@@ -16,12 +16,23 @@ interface BlueskyFacet {
   features: BlueskyFacetFeature[];
 }
 
+// Escapes quotes too: the output is used both as text and inside href="…",
+// and an unescaped `"` in post text would break out of the attribute.
 function escapeHtml(str: string): string {
-  return str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return str
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 }
-function escapeAttr(str: string): string {
-  return str.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const escapeAttr = escapeHtml;
+// Facet URIs are author-controlled; only web/mail links become hrefs.
+function isSafeLinkUri(uri: string): boolean {
+  return /^(?:https?:|mailto:)/i.test(uri.trim());
 }
+// Runs on already-escaped text, so the URL can't contain a raw quote or `<`;
+// stopping at `&` keeps an escaped entity (e.g. &quot;) out of the href.
 function linkifyUrls(escaped: string): string {
   return escaped.replace(
     /(https?:\/\/[^\s<&]+)/g,
@@ -43,7 +54,7 @@ export function facetsToHtml(text: string, facets?: BlueskyFacet[]): string {
     html += linkifyUrls(escapeHtml(decoder.decode(bytes.slice(lastByte, byteStart))));
     const facetText = escapeHtml(decoder.decode(bytes.slice(byteStart, byteEnd)));
     const feature = facet.features[0];
-    if (feature?.$type === "app.bsky.richtext.facet#link" && feature.uri) {
+    if (feature?.$type === "app.bsky.richtext.facet#link" && feature.uri && isSafeLinkUri(feature.uri)) {
       html += `<a href="${escapeAttr(feature.uri)}" target="_blank" rel="noopener noreferrer">${facetText}</a>`;
     } else if (feature?.$type === "app.bsky.richtext.facet#mention" && feature.did) {
       html += `<a href="https://bsky.app/profile/${escapeAttr(feature.did)}" target="_blank" rel="noopener noreferrer">${facetText}</a>`;
@@ -133,7 +144,13 @@ interface BlueskyFeedItem {
     embed?: unknown;
     viewer?: { like?: string; repost?: string };
   };
-  reason?: unknown;
+  // reasonRepost carries the reposter + repost time; reasonPin (pinned post on
+  // an author feed) is not a repost.
+  reason?: {
+    $type?: string;
+    by?: { did: string; handle: string; displayName?: string };
+    indexedAt?: string;
+  };
 }
 
 // Maps a hydrated Bluesky feed item (getTimeline / getAuthorFeed item) to a
@@ -143,6 +160,8 @@ export function mapBlueskyFeedItem(item: BlueskyFeedItem): ClientPost {
   const text = post.record?.text || "";
   const rkey = post.uri.split("/").pop();
   const handle = post.author.handle;
+  const repost =
+    item.reason?.$type === "app.bsky.feed.defs#reasonRepost" && item.reason.by ? item.reason : null;
   return {
     id: 0,
     platform: "bluesky",
@@ -155,7 +174,11 @@ export function mapBlueskyFeedItem(item: BlueskyFeedItem): ClientPost {
     replyToId: post.record?.reply?.parent?.uri || null,
     threadRootId: post.record?.reply?.root?.uri || null,
     threadRootCid: post.record?.reply?.root?.cid || null,
-    repostOfId: item.reason ? post.uri : null,
+    repostOfId: repost ? post.uri : null,
+    repostedBy: repost
+      ? { handle: repost.by!.handle, displayName: repost.by!.displayName || null, platform: "bluesky" }
+      : null,
+    repostedAt: repost?.indexedAt ? new Date(repost.indexedAt).toISOString() : null,
     quotedPost: extractQuotedPost(post.embed) || null,
     linkCard: extractLinkCard(post.embed) || null,
     likeCount: post.likeCount ?? 0,

@@ -4,6 +4,7 @@ import { useState, useEffect, type ReactNode } from "react";
 import { useRouter, usePathname } from "next/navigation";
 import Link from "next/link";
 import { CreatePost, type ReplyTarget, type QuoteTarget } from "@/components/CreatePost";
+import { clearLocalData } from "@/lib/client/local-data";
 
 interface UserInfo {
   id: number;
@@ -173,8 +174,10 @@ export function AppLayout({ children }: { children: ReactNode }) {
   }
 
   async function handleLogout() {
+    // Clear local data first: it needs the session to know which user's
+    // cache to delete.
+    await clearLocalData();
     await fetch("/api/auth/logout", { method: "POST" });
-    sessionStorage.clear();
     cachedUser = null;
     router.push("/login");
   }

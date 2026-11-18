@@ -94,14 +94,41 @@ export class BlueskyClient {
   // The PDS issues a rotating DPoP nonce; we echo the latest one back. Tracked
   // in memory for the life of this client instance.
   private nonce: string | null = null;
+  // In-flight token refresh, shared by every request that hits invalid_token.
+  private refreshing: Promise<void> | null = null;
+
+  // One client per page session. Separate instances each held their own token
+  // and refreshed independently, so one expiry could fan out into several
+  // serialized server-side refreshes, each rotating the token out from under
+  // the others. Every caller (feed hooks, compose, post/person pages, mirror
+  // resolution) now shares this instance.
+  private static shared: Promise<BlueskyClient | null> | null = null;
 
   private constructor(creds: BlueskyCredentials) {
     this.creds = creds;
   }
 
-  // Loads credentials and imports the DPoP key. Returns null when the user has
-  // no Bluesky session.
-  static async create(): Promise<BlueskyClient | null> {
+  // Returns the shared client, loading credentials and importing the DPoP key
+  // on first use. Resolves null when the user has no Bluesky session. Null and
+  // failures aren't cached, so a later call can retry.
+  static create(): Promise<BlueskyClient | null> {
+    if (!BlueskyClient.shared) {
+      const p = BlueskyClient.load();
+      BlueskyClient.shared = p;
+      p.then(
+        (c) => { if (!c && BlueskyClient.shared === p) BlueskyClient.shared = null; },
+        () => { if (BlueskyClient.shared === p) BlueskyClient.shared = null; },
+      );
+    }
+    return BlueskyClient.shared;
+  }
+
+  // Drops the shared client (logout / account change).
+  static resetShared(): void {
+    BlueskyClient.shared = null;
+  }
+
+  private static async load(): Promise<BlueskyClient | null> {
     const res = await fetch("/api/bluesky/credentials");
     if (!res.ok) return null;
     const data = await res.json();
@@ -153,13 +180,13 @@ export class BlueskyClient {
     return `${signingInput}.${b64url(sig)}`;
   }
 
-  private async makeProof(method: string, url: URL): Promise<string> {
+  private async makeProof(method: string, url: URL, accessToken: string): Promise<string> {
     const payload: Record<string, unknown> = {
       jti: crypto.randomUUID(),
       htm: method,
       htu: url.origin + url.pathname, // RFC 9449: no query/fragment
       iat: Math.floor(Date.now() / 1000),
-      ath: await sha256b64url(this.creds.accessToken),
+      ath: await sha256b64url(accessToken),
     };
     if (this.nonce) payload.nonce = this.nonce;
     return this.signJwt({ typ: "dpop+jwt", alg: this.alg, jwk: this.publicJwk! }, payload);
@@ -177,9 +204,10 @@ export class BlueskyClient {
     depth = 0,
   ): Promise<Response> {
     const url = new URL(pathname, this.creds.pdsUrl);
+    const accessToken = this.creds.accessToken; // the token this attempt uses
     const headers: Record<string, string> = {
-      Authorization: `DPoP ${this.creds.accessToken}`,
-      DPoP: await this.makeProof(method, url),
+      Authorization: `DPoP ${accessToken}`,
+      DPoP: await this.makeProof(method, url, accessToken),
     };
     let body: BodyInit | undefined;
     if (opts.json !== undefined) {
@@ -200,7 +228,9 @@ export class BlueskyClient {
       const err = wwwAuthError(res);
       if (err === "use_dpop_nonce") return this.request(method, pathname, opts, depth + 1);
       if (err === "invalid_token") {
-        await this.refresh();
+        // If another request already replaced the token while this one was in
+        // flight, just retry with the new one instead of refreshing again.
+        if (this.creds.accessToken === accessToken) await this.refresh(accessToken);
         return this.request(method, pathname, opts, depth + 1);
       }
     }
@@ -331,8 +361,22 @@ export class BlueskyClient {
     return this.createRecord("app.bsky.feed.post", record);
   }
 
-  private async refresh(): Promise<void> {
-    const res = await fetch("/api/bluesky/credentials/refresh", { method: "POST" });
+  // Single-flight: concurrent 401s share one refresh. `staleToken` tells the
+  // server which token failed, so it only rotates if that's still the current
+  // one (another tab or a server-side call may have refreshed already).
+  private refresh(staleToken: string): Promise<void> {
+    this.refreshing ??= this.doRefresh(staleToken).finally(() => {
+      this.refreshing = null;
+    });
+    return this.refreshing;
+  }
+
+  private async doRefresh(staleToken: string): Promise<void> {
+    const res = await fetch("/api/bluesky/credentials/refresh", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ staleToken }),
+    });
     if (!res.ok) throw new Error("Bluesky session refresh failed");
     const data = await res.json();
     if (!data.bluesky) throw new Error("Bluesky session expired");

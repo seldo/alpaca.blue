@@ -33,3 +33,7 @@ export async function updateSettings(patch: Partial<Settings>): Promise<Settings
   settingsPromise = Promise.resolve(next);
   return next;
 }
+
+export function resetSettings(): void {
+  settingsPromise = null;
+}

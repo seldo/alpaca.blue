@@ -4,13 +4,18 @@
 import { BlueskyClient } from "./bluesky";
 import { getMastodonCredentials, type MastodonCredentials } from "./mastodon";
 
-let bskyPromise: Promise<BlueskyClient | null> | null = null;
 let mastoPromise: Promise<MastodonCredentials | null> | null = null;
 
+// BlueskyClient.create() already returns the one shared instance.
 export function sharedBluesky(): Promise<BlueskyClient | null> {
-  return (bskyPromise ??= BlueskyClient.create());
+  return BlueskyClient.create();
 }
 
 export function sharedMastodon(): Promise<MastodonCredentials | null> {
   return (mastoPromise ??= getMastodonCredentials());
+}
+
+export function resetSharedClients(): void {
+  mastoPromise = null;
+  BlueskyClient.resetShared();
 }

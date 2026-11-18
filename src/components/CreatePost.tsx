@@ -1,12 +1,14 @@
 "use client";
 
 import { useState, useRef } from "react";
+import { RichText } from "@atproto/api";
 import { BlueskyClient } from "@/lib/client/bluesky";
 import {
   getMastodonCredentials,
   mastodonUploadMedia,
   mastodonPostStatus,
-  mastodonReplyPrefix,
+  mastodonReplyContext,
+  isRestrictedVisibility,
   type MastodonCredentials,
 } from "@/lib/client/mastodon";
 import { expandBareDomains } from "@/lib/expand-bare-domains";
@@ -23,6 +25,8 @@ export interface ReplyTarget {
   authorHandle: string | null;
   authorDisplayName: string | null;
   authorAvatar: string | null;
+  // Mastodon visibility of the post being replied to / quoted, when known.
+  visibility?: string | null;
   alsoPostedOn: Array<{
     platform: string;
     postUrl: string | null;
@@ -97,7 +101,11 @@ function computeReplyTargets(replyTo: ReplyTarget | undefined): ResolvedReplyTar
 }
 
 const MAX_IMAGES = 4;
-const MAX_LENGTH = 300;
+// Bluesky's limit is 300 graphemes of the text actually sent (after bare
+// domains are expanded and any quoted-post URL is appended). Mastodon's
+// default is 500 characters; it only binds when Bluesky isn't a target.
+const BLUESKY_MAX = 300;
+const MASTODON_MAX = 500;
 const MAX_DIMENSION = 2048;
 const MAX_BYTES = 950_000; // Bluesky limit is 1,000,000; leave headroom
 
@@ -169,12 +177,13 @@ export function CreatePost({ onClose, onPosted, replyTo, quoteOf }: CreatePostPr
   const [posting, setPosting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
+  // Set when the post went out on one platform but failed on the other.
+  const [partialFailure, setPartialFailure] = useState<string | null>(null);
   const [editingAltIndex, setEditingAltIndex] = useState<number | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const hasContent = text.trim().length > 0 || images.length > 0;
-  const canPost = hasContent && text.length <= MAX_LENGTH && !posting;
 
   // Shared by the file picker and desktop drag-and-drop. Filters to images,
   // respects the MAX_IMAGES cap, compresses, and appends.
@@ -237,12 +246,47 @@ export function CreatePost({ onClose, onPosted, replyTo, quoteOf }: CreatePostPr
   // mirrors on other platforms. We send a reply to every available target.
   const replyTargets = computeReplyTargets(replyTo);
 
+  // Replying to a followers-only post or a private mention on Mastodon must
+  // stay on Mastodon: a Bluesky reply would publish the conversation.
+  const replyIsPrivate = replyTo?.platform === "mastodon" && isRestrictedVisibility(replyTo.visibility);
+  const willSendBluesky = replyTo ? !!replyTargets.bluesky && !replyIsPrivate : true;
+  const bsQuoteTarget = quoteOf ? findBlueskyQuoteTarget(quoteOf) : null;
+
+  // The exact Bluesky text for `content`: shared by the length check and the
+  // actual post so they can't drift apart.
+  function buildBlueskyText(content: string, hasImages: boolean): string {
+    let textBody = content;
+    if (quoteOf && !(bsQuoteTarget && !hasImages) && quoteOf.postUrl) {
+      textBody = `${textBody}\n\n${quoteOf.postUrl}`.trim();
+    }
+    return textBody;
+  }
+
+  const blueskyLength = willSendBluesky
+    ? new RichText({ text: expandBareDomains(buildBlueskyText(text.trim(), images.length > 0).trim()) }).graphemeLength
+    : 0;
+  const mastodonLength = [...text.trim()].length;
+  const [usedLength, maxLength] = willSendBluesky
+    ? [blueskyLength, BLUESKY_MAX]
+    : [mastodonLength, MASTODON_MAX];
+  const canPost = hasContent && usedLength <= maxLength && !posting;
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!canPost) return;
     setPosting(true);
     setError(null);
+    try {
+      await submit();
+    } catch (err) {
+      console.error("Post error:", err);
+      setError(err instanceof Error ? err.message : "Failed to post.");
+    } finally {
+      setPosting(false);
+    }
+  }
 
+  async function submit() {
     // Resolve the write clients once. Bluesky is always present (it's the
     // login); Mastodon only if connected.
     if (!bskyRef.current) bskyRef.current = await BlueskyClient.create();
@@ -254,12 +298,27 @@ export function CreatePost({ onClose, onPosted, replyTo, quoteOf }: CreatePostPr
     const isReply = !!replyTo;
     const isQuote = !!quoteOf;
     const { bluesky: bsReplyTarget, mastodon: mastoReplyTarget } = replyTargets;
-    const bsQuoteTarget = isQuote ? findBlueskyQuoteTarget(quoteOf!) : null;
+
+    // Mastodon reply context (the @-prefix and the visibility to post with),
+    // resolved before fanning out because a restricted parent also decides
+    // whether Bluesky is a target at all.
+    const mastoReplyCtx =
+      mastoReplyTarget && mastoRef.current
+        ? await mastodonReplyContext(
+            mastoRef.current,
+            mastoReplyTarget.statusId,
+            expandBareDomains(content),
+            replyTo?.platform === "mastodon" ? replyTo.visibility : null,
+          )
+        : null;
+    const privateReply =
+      replyTo?.platform === "mastodon" &&
+      (replyIsPrivate || isRestrictedVisibility(mastoReplyCtx?.visibility));
 
     async function postToBluesky(blueskyImages?: { image: unknown; alt: string }[]): Promise<boolean> {
       const body: Record<string, unknown> = {};
-      let textBody = content;
       const hasImages = !!(blueskyImages && blueskyImages.length > 0);
+      const textBody = buildBlueskyText(content, hasImages);
 
       if (bsReplyTarget) {
         body.replyTo = { uri: bsReplyTarget.uri, cid: bsReplyTarget.cid };
@@ -271,12 +330,10 @@ export function CreatePost({ onClose, onPosted, replyTo, quoteOf }: CreatePostPr
 
       if (isQuote) {
         // Bluesky allows a single embed per post — native quote and images
-        // are mutually exclusive. Native quote when possible, otherwise
-        // append the URL.
+        // are mutually exclusive. Native quote when possible; otherwise
+        // buildBlueskyText has appended the URL.
         if (bsQuoteTarget && !hasImages) {
           body.quote = { uri: bsQuoteTarget.uri, cid: bsQuoteTarget.cid };
-        } else if (quoteOf!.postUrl) {
-          textBody = `${textBody}\n\n${quoteOf!.postUrl}`.trim();
         }
       }
 
@@ -308,14 +365,13 @@ export function CreatePost({ onClose, onPosted, replyTo, quoteOf }: CreatePostPr
         const creds = mastoRef.current!;
         // Bare-domain expansion + reply @-prefix (Mastodon threading rule).
         let statusText = expandBareDomains(textBody);
-        if (mastoReplyTarget) {
-          const prefix = await mastodonReplyPrefix(creds, mastoReplyTarget.statusId, statusText);
-          if (prefix) statusText = `${prefix} ${statusText}`.trim();
-        }
+        if (mastoReplyCtx?.prefix) statusText = `${mastoReplyCtx.prefix} ${statusText}`.trim();
         await mastodonPostStatus(creds, {
           status: statusText,
           inReplyToId: mastoReplyTarget?.statusId,
           mediaIds,
+          // Never less private than the parent (or the user's default).
+          visibility: mastoReplyCtx?.visibility ?? undefined,
         });
         return true;
       } catch (err) {
@@ -329,7 +385,7 @@ export function CreatePost({ onClose, onPosted, replyTo, quoteOf }: CreatePostPr
     //   (you can't reply where there's no thread to graft onto).
     // - Quotes and new posts: both platforms (the user is broadcasting).
     // Require the corresponding client to be available.
-    const sendToBluesky = (isReply ? !!bsReplyTarget : true) && !!bskyRef.current;
+    const sendToBluesky = (isReply ? !!bsReplyTarget && !privateReply : true) && !!bskyRef.current;
     const sendToMastodon = (isReply ? !!mastoReplyTarget : true) && !!mastoRef.current;
 
     // When images are present, Mastodon goes first — Bluesky only posts if Mastodon succeeds
@@ -375,15 +431,22 @@ export function CreatePost({ onClose, onPosted, replyTo, quoteOf }: CreatePostPr
       }
     }
 
-    setPosting(false);
-
     if (results.length > 0) {
       setText("");
       previews.forEach((url) => URL.revokeObjectURL(url));
       setImages([]);
       setPreviews([]);
+      setAlts([]);
       setSuccess(true);
-      onPosted?.();
+      if (errors.length > 0) {
+        // Keep the composer open so the failure is actually seen; Dismiss
+        // finishes the post (closes + refreshes the feed).
+        setPartialFailure(
+          `Posted to ${results.join(" and ")}, but posting to ${errors.join(" and ")} failed, so it isn't there.`,
+        );
+      } else {
+        onPosted?.();
+      }
     } else {
       setError(`Failed to post to ${errors.join(" and ")}.`);
     }
@@ -391,9 +454,18 @@ export function CreatePost({ onClose, onPosted, replyTo, quoteOf }: CreatePostPr
 
   if (success) {
     return (
-      <div className="create-post-success">
-        <span>Posted!</span>
-        <button className="create-post-success-close" onClick={() => { setSuccess(false); onClose?.(); }}>
+      <div className={`create-post-success${partialFailure ? " create-post-partial" : ""}`}>
+        <span>{partialFailure ?? "Posted!"}</span>
+        <button
+          className="create-post-success-close"
+          onClick={() => {
+            const wasPartial = !!partialFailure;
+            setSuccess(false);
+            setPartialFailure(null);
+            if (wasPartial && onPosted) onPosted();
+            else onClose?.();
+          }}
+        >
           Dismiss
         </button>
       </div>
@@ -457,12 +529,19 @@ export function CreatePost({ onClose, onPosted, replyTo, quoteOf }: CreatePostPr
             platforms={
               replyTo
                 ? ([
-                    ...(replyTargets.bluesky ? ["bluesky" as const] : []),
+                    ...(willSendBluesky ? ["bluesky" as const] : []),
                     ...(replyTargets.mastodon ? ["mastodon" as const] : []),
                   ])
                 : (["bluesky", "mastodon"] as const)
             }
           />
+          {replyIsPrivate && (
+            <div className="create-post-private-note">
+              {replyTo?.visibility === "direct"
+                ? "Private mention: your reply is only visible to the people mentioned."
+                : "Followers-only post: your reply will also be followers-only."}
+            </div>
+          )}
         </>
       )}
       <textarea
@@ -471,7 +550,6 @@ export function CreatePost({ onClose, onPosted, replyTo, quoteOf }: CreatePostPr
         value={text}
         onChange={(e) => { setText(e.target.value); setError(null); }}
         rows={4}
-        maxLength={MAX_LENGTH}
         disabled={posting}
         autoFocus
       />
@@ -537,8 +615,8 @@ export function CreatePost({ onClose, onPosted, replyTo, quoteOf }: CreatePostPr
               </button>
             </>
           )}
-          <span className="post-reply-charcount" style={{ color: text.length > MAX_LENGTH * 0.9 ? "var(--color-error)" : undefined }}>
-            {text.length}/{MAX_LENGTH}
+          <span className="post-reply-charcount" style={{ color: usedLength > maxLength * 0.9 ? "var(--color-error)" : undefined }}>
+            {usedLength}/{maxLength}
           </span>
         </div>
         <div style={{ display: "flex", gap: "8px" }}>

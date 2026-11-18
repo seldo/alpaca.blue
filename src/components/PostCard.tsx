@@ -6,6 +6,7 @@ import { Avatar } from "@/components/Avatar";
 import { useClientActions } from "@/lib/client/ClientActionsContext";
 import type { ClientPost } from "@/lib/client/types";
 import { detectMirror, resolveMirrorQuote } from "@/lib/client/mirrors";
+import { SafeHtml } from "@/components/SafeHtml";
 
 function ImageModal({
   images,
@@ -169,6 +170,10 @@ interface PostData {
   replyToAuthor?: { handle: string; dbPostId: number; postUrl: string | null } | null;
   replyToMe?: boolean;
   linkCard?: { url: string; title: string; description?: string; thumb?: string } | null;
+  // Mastodon visibility ("public" | "unlisted" | "private" | "direct").
+  visibility?: string | null;
+  repostedBy?: { handle: string; displayName: string | null; platform: string } | null;
+  repostedAt?: string | null;
 }
 
 
@@ -210,12 +215,16 @@ function getQuotedPostPlatform(quotedPost: NonNullable<PostData["quotedPost"]>):
 
 function linkifyText(text: string): string {
   // Escape HTML, then linkify URLs
+  // Quotes are escaped and the URL match stops at `&`, so URL text can't
+  // break out of the href attribute. Output still goes through sanitizeHtml.
   const escaped = text
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
   return escaped.replace(
-    /(https?:\/\/[^\s<]+)/g,
+    /(https?:\/\/[^\s<&]+)/g,
     '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
   );
 }
@@ -285,8 +294,11 @@ export function PostCard({ post }: { post: PostData }) {
     setFavorited(nextFavorited);
     setLocalLikeCount((c) => c + (nextFavorited === prevFavorited ? 0 : nextFavorited ? 1 : -1));
     setFavoriting(true);
+    // Hand the action this card's *current* state. `post` is the props as
+    // first rendered and never changes after a toggle, so passing it made a
+    // second click repeat the first action (re-like instead of unlike).
     clientActions
-      .like(post as unknown as ClientPost)
+      .like({ ...post, viewerLiked: prevFavorited, likeCount: prevCount } as unknown as ClientPost)
       .then((r) => { setFavorited(r.viewerLiked); setLocalLikeCount(r.likeCount); })
       .catch((err) => {
         console.error("Favorite error:", err);
@@ -313,6 +325,7 @@ export function PostCard({ post }: { post: PostData }) {
             authorHandle: post.author?.handle ?? null,
             authorDisplayName: post.author?.displayName ?? null,
             authorAvatar: post.author?.avatarUrl ?? null,
+            visibility: post.visibility ?? null,
             alsoPostedOn: (post.alsoPostedOn || []).map((cp) => ({
               platform: cp.platform,
               postUrl: cp.postUrl,
@@ -350,8 +363,10 @@ export function PostCard({ post }: { post: PostData }) {
     setReposting(true);
     setReposted(!isUndo);
     setLocalRepostCount((c) => c + (isUndo ? -1 : 1));
+    // Current state, not the original props: otherwise "Undo repost" right
+    // after reposting reblogs again and re-runs the cross-platform fanout.
     clientActions
-      .repost(post as unknown as ClientPost)
+      .repost({ ...post, viewerReposted: prevReposted, repostCount: prevCount } as unknown as ClientPost)
       .then((r) => { setReposted(r.viewerReposted); setLocalRepostCount(r.repostCount); })
       .catch((err) => {
         console.error("Repost error:", err);
@@ -380,6 +395,7 @@ export function PostCard({ post }: { post: PostData }) {
             authorHandle: post.author?.handle ?? null,
             authorDisplayName: post.author?.displayName ?? null,
             authorAvatar: post.author?.avatarUrl ?? null,
+            visibility: post.visibility ?? null,
             alsoPostedOn: (post.alsoPostedOn || []).map((cp) => ({
               platform: cp.platform,
               postUrl: cp.postUrl,
@@ -455,6 +471,24 @@ export function PostCard({ post }: { post: PostData }) {
 
   return (
     <article className="post-card post-card-clickable" onClick={handleCardClick}>
+      {post.repostedBy && (
+        <div className="post-reposted-by">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+            <polyline points="17 1 21 5 17 9" />
+            <path d="M3 11V9a4 4 0 0 1 4-4h14" />
+            <polyline points="7 23 3 19 7 15" />
+            <path d="M21 13v2a4 4 0 0 1-4 4H3" />
+          </svg>
+          <a
+            href={`/identities/${encodeURIComponent(`${post.repostedBy.platform}:${post.repostedBy.handle}`)}`}
+            className="post-reposted-by-link"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {post.repostedBy.displayName || post.repostedBy.handle}
+          </a>{" "}
+          reposted
+        </div>
+      )}
       <div className="post-author">
         {author?.avatarUrl && (
           avatarLink ? (
@@ -485,6 +519,14 @@ export function PostCard({ post }: { post: PostData }) {
               </a>
             ) : (
               author?.handle
+            )}
+            {(post.visibility === "private" || post.visibility === "direct") && (
+              <span
+                className="post-visibility-badge"
+                title={post.visibility === "direct" ? "Only visible to the people mentioned" : "Only visible to followers"}
+              >
+                {post.visibility === "direct" ? "Private mention" : "Followers only"}
+              </span>
             )}
           </span>
         </div>
@@ -550,9 +592,9 @@ export function PostCard({ post }: { post: PostData }) {
       {!isMirror && (
         <div className="post-content">
           {post.contentHtml ? (
-            <div dangerouslySetInnerHTML={{ __html: post.contentHtml }} />
+            <SafeHtml html={post.contentHtml} />
           ) : post.content ? (
-            <div dangerouslySetInnerHTML={{ __html: linkifyText(post.content) }} />
+            <SafeHtml html={linkifyText(post.content)} />
           ) : null}
         </div>
       )}
@@ -653,13 +695,13 @@ export function PostCard({ post }: { post: PostData }) {
               <span className="quoted-post-handle">@{qpHandleDisplay}</span>
             </div>
             {qp.contentHtml ? (
-              <div
+              <SafeHtml
                 className="quoted-post-content"
-                dangerouslySetInnerHTML={{ __html: qp.contentHtml }}
+                html={qp.contentHtml}
               />
             ) : qp.text ? (
               <div className="quoted-post-content">
-                <div dangerouslySetInnerHTML={{ __html: linkifyText(qp.text) }} />
+                <SafeHtml html={linkifyText(qp.text)} />
               </div>
             ) : null}
             {qp.media && qp.media.length > 0 && (() => {

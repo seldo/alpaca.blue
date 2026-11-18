@@ -27,6 +27,8 @@ import { likePost, repostPost } from "@/lib/client/actions";
 import { ClientActionsContext, type ClientActions } from "@/lib/client/ClientActionsContext";
 import { extractBlueskyFollowUri } from "@/lib/profile-meta";
 import type { ClientPost } from "@/lib/client/types";
+import { SafeHtml } from "@/components/SafeHtml";
+import { byFeedTimeDesc } from "@/lib/client/types";
 
 interface Identity {
   id: number;
@@ -230,7 +232,7 @@ export default function IdentityPage() {
     if (gen !== generation.current) return;
     const all = [...accPosts.current];
     for (const p of all) enrichAuthor(p, map);
-    all.sort((a, b) => b.postedAt.localeCompare(a.postedAt));
+    all.sort(byFeedTimeDesc);
     setPosts(mergeTimeline(all));
     setHasMore(page.cursor !== null);
   }, []);
@@ -309,6 +311,7 @@ export default function IdentityPage() {
     } catch (err) {
       console.error("Follow toggle failed:", err);
       setIsFollowing(!next); // rollback
+      alert(err instanceof Error ? err.message : "Follow failed");
     } finally {
       setFollowBusy(false);
     }
@@ -373,7 +376,7 @@ export default function IdentityPage() {
 
               {identity.bio && (
                 identity.platform === "mastodon" ? (
-                  <div className="person-identity-bio" dangerouslySetInnerHTML={{ __html: identity.bio }} />
+                  <SafeHtml className="person-identity-bio" html={identity.bio} />
                 ) : (
                   <p className="person-identity-bio person-identity-bio-text">{identity.bio}</p>
                 )
