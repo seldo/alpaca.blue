@@ -8,18 +8,17 @@ function reactorProfileUrl(reactor: Reactor, platform: ReactionGroup["platform"]
   if (reactor.personId) return `/persons/${reactor.personId}`;
   if (reactor.platformIdentityId) return `/identities/${reactor.platformIdentityId}`;
 
-  // Otherwise route through the lookup-or-create endpoint, which inserts
-  // a platformIdentities row on demand and redirects to the canonical page.
+  // Otherwise open the identity page in actor mode ("<platform>:<actor>"),
+  // which loads the profile live. This used to go through /identities/lookup,
+  // which inserted a platformIdentities row for everyone you clicked; those
+  // rows then showed up as "unlinked identities" that could never be matched.
   const isMastodon =
     platform === "mastodon" || (platform === "both" && reactor.handle.includes("@"));
-  const params = new URLSearchParams({
-    platform: isMastodon ? "mastodon" : "bluesky",
-    handle: reactor.handle,
-  });
-  if (!isMastodon && reactor.did) params.set("did", reactor.did);
-  if (reactor.displayName) params.set("displayName", reactor.displayName);
-  if (reactor.avatarUrl) params.set("avatarUrl", reactor.avatarUrl);
-  return `/identities/lookup?${params.toString()}`;
+  // Bluesky DIDs survive handle changes; Mastodon is keyed by @user@instance.
+  const actor = isMastodon
+    ? `mastodon:${reactor.handle}`
+    : `bluesky:${reactor.did || reactor.handle}`;
+  return `/identities/${encodeURIComponent(actor)}`;
 }
 
 function relativeTime(iso: string): string {

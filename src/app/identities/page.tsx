@@ -13,6 +13,7 @@ interface Identity {
   displayName: string | null;
   avatarUrl: string | null;
   bio: string | null;
+  isFollowed?: boolean;
 }
 
 interface Person {
@@ -51,7 +52,13 @@ export default function IdentitiesPage() {
       const suggestData = await suggestRes.json();
 
       if (identData.persons) setPersons(identData.persons);
-      if (identData.unlinked) setUnlinked(identData.unlinked);
+      // Only accounts the user follows: "unlinked" means "a follow we haven't
+      // matched across platforms". Unfollowed rows (from a Mastodon
+      // disconnect, or ones the old lookup page created for anyone you
+      // clicked) aren't candidates for matching and would just be noise.
+      if (identData.unlinked) {
+        setUnlinked((identData.unlinked as Identity[]).filter((i) => i.isFollowed));
+      }
       if (Array.isArray(suggestData)) setSuggestions(suggestData);
     } catch (err) {
       console.error("Failed to fetch identity data:", err);
